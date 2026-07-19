@@ -4,9 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#F2F3F1">
 <link rel="manifest" href="manifest.json">
 <title>timer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -22,7 +26,7 @@
     <span>:</span>
     <input id="seconds" type="number" inputmode="numeric" min="0" max="59" value="00" aria-label="seconds">
   </div>
-  <button id="start-btn" disabled>Start</button>
+  <button id="start-btn" class="primary" disabled>Start</button>
   <p id="status-text" class="status"></p>
 </section>
 
@@ -32,7 +36,7 @@
   <div class="progress-track"><div id="progress-bar"></div></div>
   <p id="now-playing" class="label"></p>
   <div class="controls">
-    <button id="pause-btn">Pause</button>
+    <button id="pause-btn" class="primary">Pause</button>
     <button id="cancel-btn" class="ghost">Cancel</button>
   </div>
 </section>

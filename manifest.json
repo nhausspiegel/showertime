@@ -3,6 +3,6 @@
   "short_name": "timer",
   "display": "standalone",
   "start_url": "./",
-  "background_color": "#111111",
-  "theme_color": "#111111"
+  "background_color": "#F2F3F1",
+  "theme_color": "#F2F3F1"
 }

@@ -1,9 +1,9 @@
 :root {
-  --bg: #111;
-  --fg: #eee;
-  --dim: #888;
-  --accent: #4ade80;
-  --border: #333;
+  --bg: #F2F3F1;
+  --fg: #16181A;
+  --dim: #74797B;
+  --accent: #2F6B4F;
+  --border: #D8DAD6;
 }
 
 * { box-sizing: border-box; }
@@ -16,7 +16,7 @@ html, body {
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, system-ui, sans-serif;
+  font-family: 'Bricolage Grotesque', -apple-system, system-ui, sans-serif;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -30,64 +30,93 @@ section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 20px;
+  text-align: center;
+  gap: 24px;
 }
 
 .label {
   color: var(--dim);
-  font-size: 14px;
-  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   margin: 0;
 }
 
 .status {
   color: var(--dim);
   font-size: 14px;
-  text-align: center;
   margin: 0;
   min-height: 1em;
 }
 
 button {
-  font: inherit;
-  font-size: 16px;
+  font-family: inherit;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--bg);
-  background: var(--accent);
-  border: none;
-  border-radius: 8px;
-  padding: 14px 28px;
-  width: 100%;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--fg);
+  border-radius: 2px;
+  padding: 14px 36px;
+  width: auto;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+button:hover, button:active {
+  background: var(--fg);
+  color: var(--bg);
 }
 
 button:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
+  background: transparent;
+  color: var(--fg);
+}
+
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.primary:hover, button.primary:active {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 button.ghost {
-  background: transparent;
+  border-color: var(--border);
   color: var(--dim);
-  border: 1px solid var(--border);
+}
+
+button.ghost:hover, button.ghost:active {
+  background: var(--dim);
+  color: var(--bg);
+  border-color: var(--dim);
 }
 
 .duration-input {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: ui-monospace, "SF Mono", monospace;
-  font-size: 48px;
-  font-weight: 300;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  font-size: 56px;
+  font-weight: 250;
 }
 
 .duration-input input {
-  width: 2ch;
+  width: 1.6ch;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
   color: var(--fg);
   font: inherit;
+  font-variant-numeric: tabular-nums;
   text-align: center;
   padding: 4px 0;
 }
@@ -104,15 +133,15 @@ button.ghost {
 }
 
 #countdown {
-  font-family: ui-monospace, "SF Mono", monospace;
-  font-size: 64px;
-  font-weight: 300;
-  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  font-size: 72px;
+  font-weight: 250;
+  letter-spacing: -0.01em;
 }
 
 .progress-track {
   width: 100%;
-  height: 2px;
+  height: 1px;
   background: var(--border);
 }
 
@@ -124,7 +153,7 @@ button.ghost {
 }
 
 .controls {
-  width: 100%;
   display: flex;
+  justify-content: center;
   gap: 12px;
 }
