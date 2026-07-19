@@ -1,6 +1,7 @@
 import * as auth from './auth.js';
 import * as spotify from './spotify.js';
 import { buildIndex, findCombo, shuffle } from './matcher.js';
+import { VERSION, DEPLOYED_AT } from './version.js';
 
 const els = {
   connectScreen: document.getElementById('connect-screen'),
@@ -68,7 +69,15 @@ function fmt(totalSeconds) {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+function renderVersionTag() {
+  const el = document.getElementById('version-tag');
+  if (!el) return;
+  el.textContent = DEPLOYED_AT ? `${VERSION} · ${DEPLOYED_AT}` : VERSION;
+  el.title = DEPLOYED_AT ? `Deployed ${DEPLOYED_AT}` : 'Local build (not deployed via CI)';
+}
+
 async function init() {
+  renderVersionTag();
   await auth.handleRedirect().catch((e) => console.error(e));
 
   if (!auth.isConnected()) {
