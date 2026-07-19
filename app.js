@@ -70,17 +70,36 @@ function fmt(totalSeconds) {
 
 // Digit-shift duration entry: typing "1234" walks the display through
 // 00:01 -> 00:12 -> 01:23 -> 12:34, calculator-style — each new digit pushes
-// in from the right, backspace shifts a zero back in from the left.
+// in from the right, backspace shifts a zero back in from the left. Typing
+// stops once 4 digits have been entered (must backspace to edit further).
 let durationDigits = '2500'; // MMSS, matches the input's initial "25:00"
+let durationTypedCount = 0; // digits typed since the last backspace/clear — caps at 4
 
 function renderDuration() {
   els.durationInput.value = `${durationDigits.slice(0, 2)}:${durationDigits.slice(2, 4)}`;
 }
 
-function setDurationDigits(next) {
-  if (next[2] > '5') return; // seconds-tens digit above 5 is never a valid time — block it live
+function commitDurationDigits(next) {
   durationDigits = next;
   renderDuration();
+}
+
+function typeDurationDigit(d) {
+  if (durationTypedCount >= 4) return;
+  const next = (durationDigits + d).slice(-4);
+  if (next[2] > '5') return; // seconds-tens digit above 5 is never a valid time — block it live
+  commitDurationDigits(next);
+  durationTypedCount++;
+}
+
+function backspaceDurationDigit() {
+  // Always succeeds, unlike typeDurationDigit — bypassing the seconds-tens
+  // gate here is required, not just permissive: the digit shifting into that
+  // slot is whatever used to be the minutes-ones digit, which was never
+  // gated, so it can exceed 5 (e.g. backspacing "09:53"). Gating removal too
+  // would silently freeze backspace on values like that.
+  commitDurationDigits(('0' + durationDigits).slice(0, 4));
+  durationTypedCount = Math.max(0, durationTypedCount - 1);
 }
 
 function pinCaretToEnd() {
@@ -91,10 +110,10 @@ function pinCaretToEnd() {
 els.durationInput.addEventListener('keydown', (e) => {
   if (e.key >= '0' && e.key <= '9') {
     e.preventDefault();
-    setDurationDigits((durationDigits + e.key).slice(-4));
+    typeDurationDigit(e.key);
   } else if (e.key === 'Backspace' || e.key === 'Delete') {
     e.preventDefault();
-    setDurationDigits(('0' + durationDigits).slice(0, 4));
+    backspaceDurationDigit();
   } else if (e.key !== 'Tab') {
     e.preventDefault();
   }
@@ -104,7 +123,7 @@ els.durationInput.addEventListener('paste', (e) => {
   e.preventDefault();
   const pasted = (e.clipboardData || window.clipboardData).getData('text');
   for (const ch of pasted.replace(/\D/g, '')) {
-    setDurationDigits((durationDigits + ch).slice(-4));
+    typeDurationDigit(ch);
   }
 });
 
