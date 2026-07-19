@@ -8,6 +8,11 @@
 
 * { box-sizing: border-box; }
 
+/* Must outrank the `section { display: flex }` rule below, which would
+   otherwise beat the UA stylesheet's `[hidden] { display: none }` and leave
+   every screen rendered at once. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -20,13 +25,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100dvh;
+  height: 100dvh;
   padding: 24px;
+  overflow: hidden;
 }
 
 section {
   width: 100%;
   max-width: 360px;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -156,4 +163,123 @@ button.ghost:hover, button.ghost:active {
   display: flex;
   justify-content: center;
   gap: 12px;
+}
+
+/* The live screen carries the most content, so it runs tighter than the
+   others to stay inside one viewport without scrolling. */
+#live-screen {
+  gap: 16px;
+}
+
+#live-screen #countdown {
+  font-size: clamp(48px, 16vh, 72px);
+  line-height: 1;
+}
+
+.now-playing-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  min-height: 56px;
+}
+
+#album-art {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: 2px;
+  object-fit: cover;
+  background: var(--border);
+}
+
+.now-playing-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+#now-playing {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#track-time {
+  font-variant-numeric: tabular-nums;
+}
+
+#queue-toggle {
+  padding: 8px 20px;
+  font-size: 12px;
+}
+
+/* The only scrolling region in the app — the page itself never scrolls. */
+#queue-panel {
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+#queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#queue-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 14px;
+  text-align: left;
+  color: var(--dim);
+}
+
+#queue-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+#queue-list li.current {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#queue-list li.played {
+  opacity: 0.45;
+}
+
+.queue-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-artist {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.queue-duration {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#queue-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
 }

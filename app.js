@@ -12,6 +12,12 @@ const els = {
   startBtn: document.getElementById('start-btn'),
   statusText: document.getElementById('status-text'),
   nowPlaying: document.getElementById('now-playing'),
+  albumArt: document.getElementById('album-art'),
+  trackTime: document.getElementById('track-time'),
+  queueToggle: document.getElementById('queue-toggle'),
+  queuePanel: document.getElementById('queue-panel'),
+  queueList: document.getElementById('queue-list'),
+  queueTotal: document.getElementById('queue-total'),
   countdown: document.getElementById('countdown'),
   progressBar: document.getElementById('progress-bar'),
   cancelBtn: document.getElementById('cancel-btn'),
@@ -22,6 +28,7 @@ const els = {
 let index = null;
 let deviceId = null;
 let session = null; // { tracks, totalSeconds, endAt, paused, pausedAt }
+let track = null; // { id, durationSec, progressSec, at } — last poll of the current track
 let pollHandle = null;
 let tickHandle = null;
 let audioCtx = null;
@@ -94,6 +101,15 @@ async function buildPoolAndIndex() {
 
 els.connectBtn.addEventListener('click', () => auth.connect());
 
+function setQueueOpen(open) {
+  els.queuePanel.hidden = !open;
+  els.queueTotal.hidden = !open;
+  els.queueToggle.setAttribute('aria-expanded', String(open));
+  els.queueToggle.textContent = open ? 'Hide queue' : 'Queue';
+}
+
+els.queueToggle.addEventListener('click', () => setQueueOpen(els.queuePanel.hidden));
+
 els.startBtn.addEventListener('click', async () => {
   primeAudio();
   const minutes = parseInt(els.minutesInput.value || '0', 10);
@@ -151,6 +167,14 @@ els.startBtn.addEventListener('click', async () => {
 
   els.pauseBtn.textContent = 'Pause';
   els.startBtn.disabled = false;
+
+  track = null;
+  els.nowPlaying.textContent = '';
+  els.trackTime.textContent = '';
+  els.albumArt.hidden = true;
+  renderQueue();
+  setQueueOpen(false);
+
   showScreen('live');
   startLiveUpdates();
 });
@@ -160,6 +184,7 @@ function startLiveUpdates() {
   tickHandle = setInterval(() => {
     if (!session || session.paused) return;
     updateCountdown();
+    updateTrackTime();
   }, 1000);
 
   pollHandle = setInterval(refreshNowPlaying, 5000);
@@ -196,15 +221,94 @@ async function refreshNowPlaying() {
   try {
     const playing = await spotify.getCurrentlyPlaying();
     const item = playing?.item;
-    els.nowPlaying.textContent = item ? `${item.name} — ${item.artists?.[0]?.name || ''}` : '';
+    if (!item) {
+      track = null;
+      els.nowPlaying.textContent = '';
+      els.trackTime.textContent = '';
+      els.albumArt.hidden = true;
+      return;
+    }
+
+    els.nowPlaying.textContent = `${item.name} — ${item.artists?.[0]?.name || ''}`;
+
+    // Spotify sorts album images widest-first; the last one is the smallest
+    // that still covers our 56px slot at 2x.
+    const art = item.album?.images?.[item.album.images.length - 1]?.url;
+    els.albumArt.hidden = !art;
+    if (art) els.albumArt.src = art;
+
+    track = {
+      id: item.id,
+      durationSec: Math.round(item.duration_ms / 1000),
+      progressSec: Math.round((playing.progress_ms || 0) / 1000),
+      at: Date.now(),
+    };
+    updateTrackTime();
+    markCurrentInQueue();
   } catch (e) {
     // non-fatal — live view keeps running off the local countdown
+  }
+}
+
+/**
+ * Interpolates between the 5s polls so the per-track clock ticks every second
+ * instead of jumping.
+ */
+function updateTrackTime() {
+  if (!track) return;
+  const elapsed = (Date.now() - track.at) / 1000;
+  const progress = Math.min(track.durationSec, track.progressSec + elapsed);
+  els.trackTime.textContent = `${fmt(progress)} / ${fmt(track.durationSec)}`;
+}
+
+function renderQueue() {
+  els.queueList.replaceChildren();
+  if (!session) return;
+
+  for (const t of session.tracks) {
+    const li = document.createElement('li');
+    li.dataset.trackId = t.id;
+
+    const title = document.createElement('span');
+    title.className = 'queue-title';
+    title.textContent = t.name;
+    const artist = document.createElement('span');
+    artist.className = 'queue-artist';
+    artist.textContent = ` — ${t.artist}`;
+    title.append(artist);
+
+    const dur = document.createElement('span');
+    dur.className = 'queue-duration';
+    dur.textContent = fmt(t.durationSec);
+
+    li.append(title, dur);
+    els.queueList.append(li);
+  }
+
+  const sum = session.tracks.reduce((n, t) => n + t.durationSec, 0);
+  els.queueTotal.replaceChildren();
+  const label = document.createElement('span');
+  label.textContent = `${session.tracks.length} tracks`;
+  const total = document.createElement('span');
+  total.textContent = fmt(sum);
+  els.queueTotal.append(label, total);
+}
+
+/** Dims tracks already played and highlights the one currently sounding. */
+function markCurrentInQueue() {
+  let seenCurrent = false;
+  for (const li of els.queueList.children) {
+    const isCurrent = !!track && li.dataset.trackId === track.id;
+    if (isCurrent) seenCurrent = true;
+    li.classList.toggle('current', isCurrent);
+    li.classList.toggle('played', !isCurrent && !seenCurrent);
   }
 }
 
 function finishSession() {
   stopLiveUpdates();
   session = null;
+  track = null;
   playChime();
   showScreen('home');
 }
@@ -213,6 +317,7 @@ els.cancelBtn.addEventListener('click', async () => {
   stopLiveUpdates();
   try { await spotify.pausePlayback(deviceId); } catch (e) { /* ignore */ }
   session = null;
+  track = null;
   showScreen('home');
 });
 
@@ -223,10 +328,17 @@ els.pauseBtn.addEventListener('click', async () => {
 
   if (session.paused) {
     session.pausedAt = Date.now();
+    // freeze the per-track clock by banking the elapsed time so far
+    if (track) {
+      track.progressSec = Math.min(track.durationSec, track.progressSec + (Date.now() - track.at) / 1000);
+      track.at = Date.now();
+    }
   } else if (session.pausedAt) {
     session.endAt += Date.now() - session.pausedAt;
     session.pausedAt = null;
+    if (track) track.at = Date.now();
     updateCountdown();
+    updateTrackTime();
   }
 
   try {

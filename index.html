@@ -34,7 +34,21 @@
   <p id="adjust-notice" class="status" hidden></p>
   <div id="countdown">0:00</div>
   <div class="progress-track"><div id="progress-bar"></div></div>
-  <p id="now-playing" class="label"></p>
+
+  <div class="now-playing-row">
+    <img id="album-art" alt="" hidden>
+    <div class="now-playing-text">
+      <p id="now-playing" class="label"></p>
+      <p id="track-time" class="status"></p>
+    </div>
+  </div>
+
+  <button id="queue-toggle" class="ghost" aria-expanded="false" aria-controls="queue-panel">Queue</button>
+  <div id="queue-panel" hidden>
+    <ul id="queue-list"></ul>
+  </div>
+  <p id="queue-total" class="status" hidden></p>
+
   <div class="controls">
     <button id="pause-btn" class="primary">Pause</button>
     <button id="cancel-btn" class="ghost">Cancel</button>
