@@ -108,9 +108,7 @@ button.ghost:hover, button.ghost:active {
 
 .duration-input {
   display: flex;
-  align-items: baseline;
   justify-content: center;
-  gap: 6px;
   font-variant-numeric: tabular-nums;
   font-size: 56px;
   font-weight: 250;
@@ -118,14 +116,15 @@ button.ghost:hover, button.ghost:active {
 
 .duration-input input {
   /* ch is sized off the font's proportional "0" glyph, but tabular-nums
-     figures render wider — 1.6ch clipped digits depending which ones landed. */
-  width: 2.4ch;
+     figures render wider than that — pad generously so no digit clips. */
+  width: 6ch;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
   color: var(--fg);
   font: inherit;
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
   text-align: center;
   padding: 4px 0;
 }
@@ -133,12 +132,6 @@ button.ghost:hover, button.ghost:active {
 .duration-input input:focus {
   outline: none;
   border-bottom-color: var(--accent);
-}
-
-.duration-input input::-webkit-outer-spin-button,
-.duration-input input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
 }
 
 #countdown {

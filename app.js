@@ -8,8 +8,7 @@ const els = {
   homeScreen: document.getElementById('home-screen'),
   liveScreen: document.getElementById('live-screen'),
   connectBtn: document.getElementById('connect-btn'),
-  minutesInput: document.getElementById('minutes'),
-  secondsInput: document.getElementById('seconds'),
+  durationInput: document.getElementById('duration'),
   startBtn: document.getElementById('start-btn'),
   statusText: document.getElementById('status-text'),
   nowPlaying: document.getElementById('now-playing'),
@@ -68,6 +67,55 @@ function fmt(totalSeconds) {
   const r = s % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
 }
+
+// Digit-shift duration entry: typing "1234" walks the display through
+// 00:01 -> 00:12 -> 01:23 -> 12:34, calculator-style — each new digit pushes
+// in from the right, backspace shifts a zero back in from the left.
+let durationDigits = '2500'; // MMSS, matches the input's initial "25:00"
+
+function renderDuration() {
+  els.durationInput.value = `${durationDigits.slice(0, 2)}:${durationDigits.slice(2, 4)}`;
+}
+
+function setDurationDigits(next) {
+  if (next[2] > '5') return; // seconds-tens digit above 5 is never a valid time — block it live
+  durationDigits = next;
+  renderDuration();
+}
+
+function pinCaretToEnd() {
+  const len = els.durationInput.value.length;
+  els.durationInput.setSelectionRange(len, len);
+}
+
+els.durationInput.addEventListener('keydown', (e) => {
+  if (e.key >= '0' && e.key <= '9') {
+    e.preventDefault();
+    setDurationDigits((durationDigits + e.key).slice(-4));
+  } else if (e.key === 'Backspace' || e.key === 'Delete') {
+    e.preventDefault();
+    setDurationDigits(('0' + durationDigits).slice(0, 4));
+  } else if (e.key !== 'Tab') {
+    e.preventDefault();
+  }
+});
+
+els.durationInput.addEventListener('paste', (e) => {
+  e.preventDefault();
+  const pasted = (e.clipboardData || window.clipboardData).getData('text');
+  for (const ch of pasted.replace(/\D/g, '')) {
+    setDurationDigits((durationDigits + ch).slice(-4));
+  }
+});
+
+els.durationInput.addEventListener('focus', pinCaretToEnd);
+els.durationInput.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  els.durationInput.focus();
+  pinCaretToEnd();
+});
+
+renderDuration();
 
 function renderVersionTag() {
   const el = document.getElementById('version-tag');
@@ -171,9 +219,7 @@ els.queueToggle.addEventListener('click', () => setQueueOpen(els.queuePanel.hidd
 
 els.startBtn.addEventListener('click', async () => {
   primeAudio();
-  const minutes = parseInt(els.minutesInput.value || '0', 10);
-  const seconds = parseInt(els.secondsInput.value || '0', 10);
-  const targetSeconds = minutes * 60 + seconds;
+  const targetSeconds = parseInt(durationDigits.slice(0, 2), 10) * 60 + parseInt(durationDigits.slice(2, 4), 10);
   if (targetSeconds <= 0) return;
 
   const combo = findCombo(index, targetSeconds);

@@ -22,9 +22,8 @@
 
 <section id="home-screen" hidden>
   <div class="duration-input">
-    <input id="minutes" type="number" inputmode="numeric" min="0" value="25" aria-label="minutes">
-    <span>:</span>
-    <input id="seconds" type="number" inputmode="numeric" min="0" max="59" value="00" aria-label="seconds">
+    <input id="duration" type="text" inputmode="numeric" autocomplete="off" autocorrect="off"
+      autocapitalize="off" spellcheck="false" value="25:00" aria-label="timer duration, minutes and seconds">
   </div>
   <button id="start-btn" class="primary" disabled>Start</button>
   <p id="status-text" class="status"></p>
