@@ -21,9 +21,32 @@ const els = {
 
 let index = null;
 let deviceId = null;
-let session = null; // { tracks, totalSeconds, remaining, paused }
+let session = null; // { tracks, totalSeconds, endAt, paused, pausedAt }
 let pollHandle = null;
 let tickHandle = null;
+let audioCtx = null;
+
+function primeAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playChime() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [ [880, 0], [660, 0.15] ].forEach(([freq, delay]) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now + delay);
+    gain.gain.setValueAtTime(0, now + delay);
+    gain.gain.linearRampToValueAtTime(0.3, now + delay + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.6);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(now + delay);
+    osc.stop(now + delay + 0.6);
+  });
+}
 
 function showScreen(name) {
   els.connectScreen.hidden = name !== 'connect';
@@ -72,6 +95,7 @@ async function buildPoolAndIndex() {
 els.connectBtn.addEventListener('click', () => auth.connect());
 
 els.startBtn.addEventListener('click', async () => {
+  primeAudio();
   const minutes = parseInt(els.minutesInput.value || '0', 10);
   const seconds = parseInt(els.secondsInput.value || '0', 10);
   const targetSeconds = minutes * 60 + seconds;
@@ -112,7 +136,13 @@ els.startBtn.addEventListener('click', async () => {
     return;
   }
 
-  session = { tracks: ordered, totalSeconds: combo.seconds, remaining: combo.seconds, paused: false };
+  session = {
+    tracks: ordered,
+    totalSeconds: combo.seconds,
+    endAt: Date.now() + combo.seconds * 1000,
+    paused: false,
+    pausedAt: null,
+  };
 
   els.adjustNotice.hidden = combo.exact;
   if (!combo.exact) {
@@ -129,12 +159,11 @@ function startLiveUpdates() {
   stopLiveUpdates();
   tickHandle = setInterval(() => {
     if (!session || session.paused) return;
-    session.remaining -= 1;
     updateCountdown();
-    if (session.remaining <= 0) finishSession();
   }, 1000);
 
   pollHandle = setInterval(refreshNowPlaying, 5000);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   refreshNowPlaying();
   updateCountdown();
 }
@@ -142,13 +171,25 @@ function startLiveUpdates() {
 function stopLiveUpdates() {
   clearInterval(tickHandle);
   clearInterval(pollHandle);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+}
+
+function onVisibilityChange() {
+  // snap the display to the correct value immediately on return, rather than
+  // waiting up to 1s for the next tick — matters after the tab/screen was
+  // backgrounded and timers were throttled
+  if (document.visibilityState === 'visible' && session && !session.paused) {
+    updateCountdown();
+  }
 }
 
 function updateCountdown() {
   if (!session) return;
-  els.countdown.textContent = fmt(session.remaining);
-  const pct = 100 * (1 - session.remaining / session.totalSeconds);
+  const remaining = Math.max(0, Math.round((session.endAt - Date.now()) / 1000));
+  els.countdown.textContent = fmt(remaining);
+  const pct = 100 * (1 - remaining / session.totalSeconds);
   els.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  if (remaining <= 0) finishSession();
 }
 
 async function refreshNowPlaying() {
@@ -164,6 +205,7 @@ async function refreshNowPlaying() {
 function finishSession() {
   stopLiveUpdates();
   session = null;
+  playChime();
   showScreen('home');
 }
 
@@ -178,6 +220,15 @@ els.pauseBtn.addEventListener('click', async () => {
   if (!session) return;
   session.paused = !session.paused;
   els.pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
+
+  if (session.paused) {
+    session.pausedAt = Date.now();
+  } else if (session.pausedAt) {
+    session.endAt += Date.now() - session.pausedAt;
+    session.pausedAt = null;
+    updateCountdown();
+  }
+
   try {
     if (session.paused) await spotify.pausePlayback(deviceId);
     else await spotify.resumePlayback(deviceId);
