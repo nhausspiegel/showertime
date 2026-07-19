@@ -1,0 +1,130 @@
+:root {
+  --bg: #111;
+  --fg: #eee;
+  --dim: #888;
+  --accent: #4ade80;
+  --border: #333;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+section {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.label {
+  color: var(--dim);
+  font-size: 14px;
+  text-align: center;
+  margin: 0;
+}
+
+.status {
+  color: var(--dim);
+  font-size: 14px;
+  text-align: center;
+  margin: 0;
+  min-height: 1em;
+}
+
+button {
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 14px 28px;
+  width: 100%;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--border);
+}
+
+.duration-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 48px;
+  font-weight: 300;
+}
+
+.duration-input input {
+  width: 2ch;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+  padding: 4px 0;
+}
+
+.duration-input input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+.duration-input input::-webkit-outer-spin-button,
+.duration-input input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#countdown {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 64px;
+  font-weight: 300;
+  letter-spacing: 1px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+}
+
+#progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 1s linear;
+}
+
+.controls {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+}

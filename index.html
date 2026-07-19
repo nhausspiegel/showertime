@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<title>timer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="connect-screen">
+  <p class="label">connect your account to start</p>
+  <button id="connect-btn">Connect Spotify</button>
+</section>
+
+<section id="home-screen" hidden>
+  <div class="duration-input">
+    <input id="minutes" type="number" inputmode="numeric" min="0" value="25" aria-label="minutes">
+    <span>:</span>
+    <input id="seconds" type="number" inputmode="numeric" min="0" max="59" value="00" aria-label="seconds">
+  </div>
+  <button id="start-btn" disabled>Start</button>
+  <p id="status-text" class="status"></p>
+</section>
+
+<section id="live-screen" hidden>
+  <p id="adjust-notice" class="status" hidden></p>
+  <div id="countdown">0:00</div>
+  <div class="progress-track"><div id="progress-bar"></div></div>
+  <p id="now-playing" class="label"></p>
+  <div class="controls">
+    <button id="pause-btn">Pause</button>
+    <button id="cancel-btn" class="ghost">Cancel</button>
+  </div>
+</section>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
