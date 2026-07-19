@@ -117,7 +117,9 @@ button.ghost:hover, button.ghost:active {
 }
 
 .duration-input input {
-  width: 1.6ch;
+  /* ch is sized off the font's proportional "0" glyph, but tabular-nums
+     figures render wider — 1.6ch clipped digits depending which ones landed. */
+  width: 2.4ch;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
