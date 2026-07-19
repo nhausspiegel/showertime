@@ -65,32 +65,40 @@ export async function fetchTopTracks(timeRange, { limit = 50 } = {}) {
   }));
 }
 
+/**
+ * Builds the player query string. Pass any params the endpoint needs and the
+ * device_id is merged in when present, so callers never hand-roll the
+ * `?`-vs-`&` joining.
+ */
+function playerQuery(deviceId, params = {}) {
+  const qs = new URLSearchParams(params);
+  if (deviceId) qs.set('device_id', deviceId);
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+}
+
 export async function getDevices() {
   const json = await api('/me/player/devices');
   return json?.devices || [];
 }
 
 export async function playTracks(uris, deviceId) {
-  const qs = deviceId ? `?device_id=${deviceId}` : '';
-  await api(`/me/player/play${qs}`, {
+  await api(`/me/player/play${playerQuery(deviceId)}`, {
     method: 'PUT',
     body: JSON.stringify({ uris }),
   });
 }
 
 export async function pausePlayback(deviceId) {
-  const qs = deviceId ? `?device_id=${deviceId}` : '';
-  await api(`/me/player/pause${qs}`, { method: 'PUT' });
+  await api(`/me/player/pause${playerQuery(deviceId)}`, { method: 'PUT' });
 }
 
 export async function resumePlayback(deviceId) {
-  const qs = deviceId ? `?device_id=${deviceId}` : '';
-  await api(`/me/player/play${qs}`, { method: 'PUT' });
+  await api(`/me/player/play${playerQuery(deviceId)}`, { method: 'PUT' });
 }
 
 export async function setRepeatOff(deviceId) {
-  const qs = deviceId ? `?device_id=${deviceId}` : '';
-  await api(`/me/player/repeat?state=off${deviceId ? '&device_id=' + deviceId : ''}`, {
+  await api(`/me/player/repeat${playerQuery(deviceId, { state: 'off' })}`, {
     method: 'PUT',
   });
 }

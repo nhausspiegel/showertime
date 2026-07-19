@@ -55,10 +55,26 @@ function playChime() {
   });
 }
 
+// Every id referenced above must exist in index.html. Without this check a
+// renamed/removed id yields a null that only explodes later, somewhere
+// unrelated — this fails at load with the offending key named instead.
+const missingEls = Object.entries(els).filter(([, el]) => !el).map(([k]) => k);
+if (missingEls.length) {
+  throw new Error(`index.html is missing element(s) for: ${missingEls.join(', ')}`);
+}
+
+// Add a screen by adding its <section> id here — showScreen() needs no edit.
+const SCREENS = {
+  connect: els.connectScreen,
+  home: els.homeScreen,
+  live: els.liveScreen,
+};
+
 function showScreen(name) {
-  els.connectScreen.hidden = name !== 'connect';
-  els.homeScreen.hidden = name !== 'home';
-  els.liveScreen.hidden = name !== 'live';
+  if (!SCREENS[name]) throw new Error(`Unknown screen: ${name}`);
+  for (const [key, el] of Object.entries(SCREENS)) {
+    el.hidden = key !== name;
+  }
 }
 
 function fmt(totalSeconds) {
@@ -292,10 +308,7 @@ els.startBtn.addEventListener('click', async () => {
   els.pauseBtn.textContent = 'Pause';
   els.startBtn.disabled = false;
 
-  track = null;
-  els.nowPlaying.textContent = '';
-  els.trackTime.textContent = '';
-  els.albumArt.hidden = true;
+  clearNowPlaying();
   renderQueue();
   setQueueOpen(false);
 
@@ -341,15 +354,20 @@ function updateCountdown() {
   if (remaining <= 0) finishSession();
 }
 
+/** Resets the track clock and the now-playing row to empty. */
+function clearNowPlaying() {
+  track = null;
+  els.nowPlaying.textContent = '';
+  els.trackTime.textContent = '';
+  els.albumArt.hidden = true;
+}
+
 async function refreshNowPlaying() {
   try {
     const playing = await spotify.getCurrentlyPlaying();
     const item = playing?.item;
     if (!item) {
-      track = null;
-      els.nowPlaying.textContent = '';
-      els.trackTime.textContent = '';
-      els.albumArt.hidden = true;
+      clearNowPlaying();
       return;
     }
 

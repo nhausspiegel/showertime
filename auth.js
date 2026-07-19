@@ -33,8 +33,17 @@ function randomString(len = 64) {
 }
 
 function loadAuth() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  return raw ? JSON.parse(raw) : null;
+  // Corrupt/partial JSON here would otherwise throw at module load and brick
+  // the app permanently — the user can't recover without manually clearing
+  // storage in devtools. Treat unreadable auth as "not connected" instead.
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.error('Discarding unreadable auth from localStorage', e);
+    localStorage.removeItem(STORAGE_KEY);
+    return null;
+  }
 }
 
 function saveAuth(auth) {
@@ -96,6 +105,9 @@ export async function handleRedirect() {
     expiresAt: Date.now() + json.expires_in * 1000,
   });
 
+  // the verifier is single-use — it's spent now, so don't leave it in storage
+  localStorage.removeItem(VERIFIER_KEY);
+
   // clean the ?code= out of the address bar
   url.searchParams.delete('code');
   url.searchParams.delete('state');
@@ -129,12 +141,31 @@ async function refresh() {
   });
 }
 
+// Single-flight guard for refresh(). Without it, two concurrent callers with
+// an expired token both POST the *same* refresh_token; Spotify's PKCE flow
+// rotates refresh tokens, so the second response is either an error or a
+// token the first caller has already superseded — and refresh()'s
+// `json.refresh_token || auth.refreshToken` fallback can then write a dead
+// token back to storage, logging the user out at the next expiry.
+// Reachable in normal use: hit Pause while the 5s now-playing poll is in
+// flight. All callers await the one in-flight refresh instead.
+let refreshInFlight = null;
+
+function refreshOnce() {
+  if (!refreshInFlight) {
+    refreshInFlight = refresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
 /** Returns a valid access token, refreshing first if it's expired/near-expiry. */
 export async function getAccessToken() {
   let auth = loadAuth();
   if (!auth) throw new Error('Not connected');
   if (Date.now() > auth.expiresAt - 30_000) {
-    await refresh();
+    await refreshOnce();
     auth = loadAuth();
   }
   return auth.accessToken;
