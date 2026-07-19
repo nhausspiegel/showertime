@@ -86,16 +86,18 @@ async function init() {
     els.startBtn.disabled = false;
   } catch (e) {
     console.error(e);
-    els.statusText.textContent = 'Could not load your library — try reloading.';
+    els.statusText.textContent = e.status === 429
+      ? 'Spotify is rate-limiting requests — wait a moment, then reload.'
+      : 'Could not load your library — try reloading.';
   }
 }
 
 async function buildPoolAndIndex() {
-  const [short, medium, long] = await Promise.all([
-    spotify.fetchTopTracks('short_term'),
-    spotify.fetchTopTracks('medium_term'),
-    spotify.fetchTopTracks('long_term'),
-  ]);
+  // Sequential, not Promise.all — keeps at most one top-tracks request in
+  // flight so we don't trip Spotify's rate limit on load.
+  const short = await spotify.fetchTopTracks('short_term');
+  const medium = await spotify.fetchTopTracks('medium_term');
+  const long = await spotify.fetchTopTracks('long_term');
   index = buildIndex(short, medium, long);
 }
 

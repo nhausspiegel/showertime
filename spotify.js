@@ -5,7 +5,14 @@ import { getAccessToken } from './auth.js';
 
 const BASE = 'https://api.spotify.com/v1';
 
-async function api(path, options = {}) {
+const MAX_RETRY_WAIT_SEC = 30;
+const MAX_429_RETRIES = 2;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function api(path, options = {}, retriesLeft = MAX_429_RETRIES) {
   const token = await getAccessToken();
   const res = await fetch(BASE + path, {
     ...options,
@@ -16,34 +23,46 @@ async function api(path, options = {}) {
     },
   });
   if (res.status === 204) return null; // no content, e.g. pause/play/seek
+
+  if (res.status === 429) {
+    if (retriesLeft <= 0) {
+      const err = new Error(`Spotify API 429 on ${path}: rate limited, retries exhausted`);
+      err.status = 429;
+      throw err;
+    }
+    const retryAfterSec = Math.min(
+      MAX_RETRY_WAIT_SEC,
+      parseInt(res.headers.get('Retry-After') || '1', 10) || 1
+    );
+    await sleep(retryAfterSec * 1000);
+    return api(path, options, retriesLeft - 1);
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Spotify API ${res.status} on ${path}: ${text}`);
+    const err = new Error(`Spotify API ${res.status} on ${path}: ${text}`);
+    err.status = res.status;
+    throw err;
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
 
 /**
- * Fetches the user's top tracks for one time range, paginating until the
- * response comes back empty (rather than assuming a fixed page cap).
+ * Fetches the user's top tracks for one time range. `/me/top/tracks` never
+ * returns more than 50 items regardless of how large the user's history is,
+ * so a single request covers the full list — no pagination needed.
  */
-export async function fetchTopTracks(timeRange, { pageSize = 50, hardCap = 1000 } = {}) {
-  const out = [];
-  let offset = 0;
-  while (out.length < hardCap) {
-    const page = await api(
-      `/me/top/tracks?time_range=${timeRange}&limit=${pageSize}&offset=${offset}`
-    );
-    const items = page?.items || [];
-    if (items.length === 0) break;
-    for (const t of items) {
-      out.push({ id: t.id, uri: t.uri, name: t.name, artist: t.artists?.[0]?.name || '', durationSec: Math.round(t.duration_ms / 1000) });
-    }
-    if (items.length < pageSize) break; // short page = last page
-    offset += pageSize;
-  }
-  return out;
+export async function fetchTopTracks(timeRange, { limit = 50 } = {}) {
+  const page = await api(`/me/top/tracks?time_range=${timeRange}&limit=${limit}`);
+  const items = page?.items || [];
+  return items.map((t) => ({
+    id: t.id,
+    uri: t.uri,
+    name: t.name,
+    artist: t.artists?.[0]?.name || '',
+    durationSec: Math.round(t.duration_ms / 1000),
+  }));
 }
 
 export async function getDevices() {
