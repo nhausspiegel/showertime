@@ -90,8 +90,10 @@ async function init() {
   els.statusText.textContent = 'Loading your library…';
 
   try {
-    await buildPoolAndIndex();
-    els.statusText.textContent = '';
+    const result = await buildPoolAndIndex();
+    els.statusText.textContent = result.stale
+      ? 'Using your cached library — could not refresh from Spotify just now.'
+      : '';
     els.startBtn.disabled = false;
   } catch (e) {
     console.error(e);
@@ -101,13 +103,59 @@ async function init() {
   }
 }
 
+const LIBRARY_CACHE_KEY = 'spotify_timer_library_cache';
+// Top-tracks lists don't meaningfully shift faster than this — safe to trust
+// the cache and skip the network entirely on reload within the window.
+const LIBRARY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+function loadLibraryCache() {
+  try {
+    const raw = localStorage.getItem(LIBRARY_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveLibraryCache(short, medium, long) {
+  try {
+    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify({ short, medium, long, cachedAt: Date.now() }));
+  } catch (e) {
+    // storage full or unavailable (e.g. private browsing) — non-fatal, just skip caching
+  }
+}
+
+/**
+ * Builds the pool + matcher index, preferring a fresh-enough cache over the
+ * network so reloading is idempotent and can't retrigger Spotify's rate
+ * limit. Falls back to a stale cache (rather than erroring) if a refresh
+ * attempt fails, e.g. mid rate-limit.
+ */
 async function buildPoolAndIndex() {
-  // Sequential, not Promise.all — keeps at most one top-tracks request in
-  // flight so we don't trip Spotify's rate limit on load.
-  const short = await spotify.fetchTopTracks('short_term');
-  const medium = await spotify.fetchTopTracks('medium_term');
-  const long = await spotify.fetchTopTracks('long_term');
-  index = buildIndex(short, medium, long);
+  const cached = loadLibraryCache();
+  const fresh = cached && (Date.now() - cached.cachedAt < LIBRARY_CACHE_TTL_MS);
+
+  if (fresh) {
+    index = buildIndex(cached.short, cached.medium, cached.long);
+    return { stale: false };
+  }
+
+  try {
+    // Sequential, not Promise.all — keeps at most one top-tracks request in
+    // flight so we don't trip Spotify's rate limit on load.
+    const short = await spotify.fetchTopTracks('short_term');
+    const medium = await spotify.fetchTopTracks('medium_term');
+    const long = await spotify.fetchTopTracks('long_term');
+    saveLibraryCache(short, medium, long);
+    index = buildIndex(short, medium, long);
+    return { stale: false };
+  } catch (e) {
+    if (cached) {
+      index = buildIndex(cached.short, cached.medium, cached.long);
+      return { stale: true };
+    }
+    throw e;
+  }
 }
 
 els.connectBtn.addEventListener('click', () => auth.connect());
