@@ -55,6 +55,44 @@ The author rule `section { display: flex }` beats the UA stylesheet's
 regardless of specificity**. Without the `!important`, all three screens render
 at once, stacked side by side. This has already been shipped as a bug once.
 
+### Duration entry: validate the committed value, never the keystroke
+
+The duration field is a single digit-shift ("calculator style") input — each
+digit pushes in from the right. Reaching a valid time therefore **requires
+passing through invalid ones**: typing `0800` walks `25:00 → 50:00 → 00:08 →
+00:80 → 08:00`.
+
+A guard that rejected the keystroke whenever the seconds-tens digit exceeded 5
+shipped once. It made **3840 of the 6000 valid times unreachable** — every time
+whose third digit is 6-9, including `08:00`. Validate `durationSeconds()` and
+flag the field (`.invalid`); never block input.
+
+### Subset-sum claims sums for the *first* track that can reach them
+
+`subsetSum()` sets `reachable[s]` only `if (!reachable[s])`, so pool order
+decides which track owns each sum. Fed in `/me/top/tracks` order (most-played
+first), the user's #1 track became the sole owner of its own duration slot, and
+every reconstruction routing through that slot dragged it in — **one song
+appeared in 5 of 5 queues across five different timer lengths, with only 12
+distinct tracks across all of them.**
+
+`buildIndex()` shuffles each pool to break this. Shuffle **after `dedupeById`,
+never before** — dedupe is first-occurrence-wins, and that ordering is what
+gives short-term tracks precedence over medium/long in the layered pools.
+
+### Countdown: never sample a clock on a fixed interval
+
+`setInterval(…, 1000)` guarantees *at least* 1000ms, so ticks land a few ms
+late and the sampled fraction of a second creeps downward. With `Math.round`,
+crossing the .5 boundary between two ticks drops the displayed integer by 2 —
+a visibly skipped second (`0:58 → 0:56`), reproducibly **6 times per 25-minute
+timer**.
+
+`scheduleTick()` instead schedules each tick onto the next second boundary,
+recomputed from the wall clock every time, so it self-corrects and drift cannot
+accumulate. Keep `Math.ceil` in `updateCountdown()`: it holds the starting
+value for a full second and reaches 0:00 exactly at `endAt`.
+
 ### Deploy verification: check the corner tag, and distrust your cache
 
 The live page renders the deployed short SHA bottom-right (`version.js`,

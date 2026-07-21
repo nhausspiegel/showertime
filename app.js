@@ -25,13 +25,18 @@ const els = {
   adjustNotice: document.getElementById('adjust-notice'),
 };
 
-let index = null;
+let pool = null; // { short, medium, long } — raw lists, kept so indexes rebuild without refetching
+let fullIndex = null; // subset-sum index over the whole pool
+let availableIndex = null; // ...over only the tracks that haven't played this session
 let deviceId = null;
 let session = null; // { tracks, totalSeconds, endAt, paused, pausedAt }
 let track = null; // { id, durationSec, progressSec, at } — last poll of the current track
+let playedIds = new Set(); // ids from the current session Spotify actually reached
 let pollHandle = null;
 let tickHandle = null;
 let audioCtx = null;
+let libraryReady = false;
+let startBusy = false;
 
 function primeAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -77,8 +82,11 @@ function showScreen(name) {
   }
 }
 
+// Floor, not round: callers own the rounding decision, and every caller here
+// is displaying either an already-rounded integer or an elapsed counter (which
+// should read 0:00 for its whole first second, not flip at the half-second).
 function fmt(totalSeconds) {
-  const s = Math.max(0, Math.round(totalSeconds));
+  const s = Math.max(0, Math.floor(totalSeconds));
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
@@ -91,8 +99,23 @@ function fmt(totalSeconds) {
 let durationDigits = '2500'; // MMSS, matches the input's initial "25:00"
 let durationTypedCount = 0; // digits typed since the last backspace/clear — caps at 4
 
+/** The committed value, and whether it's a real time. Max is 99:59 = 5999s. */
+function durationSeconds() {
+  const minutes = parseInt(durationDigits.slice(0, 2), 10);
+  const seconds = parseInt(durationDigits.slice(2, 4), 10);
+  const totalSeconds = minutes * 60 + seconds;
+  return { valid: seconds < 60 && totalSeconds > 0, totalSeconds };
+}
+
+// The one choke point every entry path funnels through — typing, backspace,
+// paste, and the initial render — so the validity flag can't drift out of
+// sync with what's on screen.
 function renderDuration() {
   els.durationInput.value = `${durationDigits.slice(0, 2)}:${durationDigits.slice(2, 4)}`;
+  const { valid } = durationSeconds();
+  els.durationInput.classList.toggle('invalid', !valid);
+  els.durationInput.setAttribute('aria-invalid', String(!valid));
+  syncStartEnabled();
 }
 
 function commitDurationDigits(next) {
@@ -101,19 +124,18 @@ function commitDurationDigits(next) {
 }
 
 function typeDurationDigit(d) {
+  // Deliberately no per-keystroke validity check. Digit-shift entry has to
+  // walk through invalid intermediate states to reach valid ones — typing
+  // "0800" goes 25:00 -> 50:00 -> 00:08 -> 00:80 -> 08:00, and rejecting the
+  // 00:80 step makes 08:00 (and every time whose third digit is 6-9)
+  // unreachable. Invalid *committed* values are flagged in renderDuration()
+  // and block Start; they never block input.
   if (durationTypedCount >= 4) return;
-  const next = (durationDigits + d).slice(-4);
-  if (next[2] > '5') return; // seconds-tens digit above 5 is never a valid time — block it live
-  commitDurationDigits(next);
+  commitDurationDigits((durationDigits + d).slice(-4));
   durationTypedCount++;
 }
 
 function backspaceDurationDigit() {
-  // Always succeeds, unlike typeDurationDigit — bypassing the seconds-tens
-  // gate here is required, not just permissive: the digit shifting into that
-  // slot is whatever used to be the minutes-ones digit, which was never
-  // gated, so it can exceed 5 (e.g. backspacing "09:53"). Gating removal too
-  // would silently freeze backspace on values like that.
   commitDurationDigits(('0' + durationDigits).slice(0, 4));
   durationTypedCount = Math.max(0, durationTypedCount - 1);
 }
@@ -150,6 +172,13 @@ els.durationInput.addEventListener('mousedown', (e) => {
   pinCaretToEnd();
 });
 
+// Three independent reasons Start can be unavailable. Each owns a flag and
+// they're combined in one place — writing `disabled` from the call sites
+// instead lets whichever ran last win, and the button sticks.
+function syncStartEnabled() {
+  els.startBtn.disabled = !libraryReady || startBusy || !durationSeconds().valid;
+}
+
 renderDuration();
 
 function renderVersionTag() {
@@ -169,7 +198,8 @@ async function init() {
   }
 
   showScreen('home');
-  els.startBtn.disabled = true;
+  libraryReady = false;
+  syncStartEnabled();
   els.statusText.textContent = 'Loading your library…';
 
   try {
@@ -177,7 +207,8 @@ async function init() {
     els.statusText.textContent = result.stale
       ? 'Using your cached library — could not refresh from Spotify just now.'
       : '';
-    els.startBtn.disabled = false;
+    libraryReady = true;
+    syncStartEnabled();
   } catch (e) {
     console.error(e);
     els.statusText.textContent = e.status === 429
@@ -219,7 +250,7 @@ async function buildPoolAndIndex() {
   const fresh = cached && (Date.now() - cached.cachedAt < LIBRARY_CACHE_TTL_MS);
 
   if (fresh) {
-    index = buildIndex(cached.short, cached.medium, cached.long);
+    setPool(cached.short, cached.medium, cached.long);
     return { stale: false };
   }
 
@@ -230,15 +261,100 @@ async function buildPoolAndIndex() {
     const medium = await spotify.fetchTopTracks('medium_term');
     const long = await spotify.fetchTopTracks('long_term');
     saveLibraryCache(short, medium, long);
-    index = buildIndex(short, medium, long);
+    setPool(short, medium, long);
     return { stale: false };
   } catch (e) {
     if (cached) {
-      index = buildIndex(cached.short, cached.medium, cached.long);
+      setPool(cached.short, cached.medium, cached.long);
       return { stale: true };
     }
     throw e;
   }
+}
+
+// --- No-repeat memory ----------------------------------------------------
+// Tracks already queued this session, so a second timer never replays them.
+// sessionStorage rather than localStorage: "session" means this tab, so the
+// memory survives reloads and closing the tab is what starts you over.
+
+const USED_TRACKS_KEY = 'spotify_timer_used_tracks';
+// How far short of the requested time we'll accept in order to avoid repeats.
+// Past this, an exact timer is worth more than a fully fresh queue.
+const REPEAT_SLACK_SEC = 30;
+
+let usedTrackIds = loadUsedTrackIds();
+
+function loadUsedTrackIds() {
+  try {
+    const raw = sessionStorage.getItem(USED_TRACKS_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function saveUsedTrackIds() {
+  try {
+    sessionStorage.setItem(USED_TRACKS_KEY, JSON.stringify([...usedTrackIds]));
+  } catch (e) {
+    // storage unavailable (private browsing) — non-fatal, the memory just
+    // won't survive a reload
+  }
+}
+
+function setPool(short, medium, long) {
+  pool = { short, medium, long };
+  rebuildIndexes();
+}
+
+function rebuildIndexes() {
+  if (!pool) return;
+  const unused = (list) => list.filter((t) => !usedTrackIds.has(t.id));
+  fullIndex = buildIndex(pool.short, pool.medium, pool.long);
+  availableIndex = buildIndex(unused(pool.short), unused(pool.medium), unused(pool.long));
+}
+
+// Defer so the DP work lands after the browser has painted the screen
+// transition that triggered it, rather than stalling it.
+function rebuildIndexesSoon() {
+  setTimeout(rebuildIndexes, 0);
+}
+
+/**
+ * Picks the tracks for a target duration, preferring ones that haven't played
+ * yet this session.
+ *
+ * Strict no-repeat would eventually make some durations unreachable, so it
+ * yields once the fresh-only match drifts more than REPEAT_SLACK_SEC off
+ * target — but only when repeating actually buys accuracy.
+ *
+ * @returns {{ combo: object, reused: boolean }|null}
+ */
+function pickCombo(targetSeconds) {
+  const fresh = findCombo(availableIndex, targetSeconds);
+  const freshOk = !!fresh && fresh.tracks.length > 0;
+  if (freshOk && targetSeconds - fresh.seconds <= REPEAT_SLACK_SEC) {
+    return { combo: fresh, reused: false };
+  }
+
+  const full = findCombo(fullIndex, targetSeconds);
+  const fullOk = !!full && full.tracks.length > 0;
+  if (!fullOk) return freshOk ? { combo: fresh, reused: false } : null;
+  if (freshOk && fresh.seconds >= full.seconds) return { combo: fresh, reused: false };
+
+  // Report reuse from the actual picks, not from the fact that we consulted
+  // the full pool — the wider index often lands on fresh tracks anyway.
+  return { combo: full, reused: full.tracks.some((t) => usedTrackIds.has(t.id)) };
+}
+
+/** Cancelling early shouldn't burn tracks that never actually played. */
+function releaseUnplayedTracks() {
+  if (!session) return;
+  for (const t of session.tracks) {
+    if (!playedIds.has(t.id)) usedTrackIds.delete(t.id);
+  }
+  saveUsedTrackIds();
+  rebuildIndexesSoon();
 }
 
 els.connectBtn.addEventListener('click', () => auth.connect());
@@ -254,16 +370,18 @@ els.queueToggle.addEventListener('click', () => setQueueOpen(els.queuePanel.hidd
 
 els.startBtn.addEventListener('click', async () => {
   primeAudio();
-  const targetSeconds = parseInt(durationDigits.slice(0, 2), 10) * 60 + parseInt(durationDigits.slice(2, 4), 10);
-  if (targetSeconds <= 0) return;
+  const { valid, totalSeconds: targetSeconds } = durationSeconds();
+  if (!valid) return;
 
-  const combo = findCombo(index, targetSeconds);
-  if (!combo || combo.tracks.length === 0) {
+  const picked = pickCombo(targetSeconds);
+  if (!picked) {
     els.statusText.textContent = 'Even your shortest song is longer than that — try a bigger timer.';
     return;
   }
+  const { combo, reused } = picked;
 
-  els.startBtn.disabled = true;
+  startBusy = true;
+  syncStartEnabled();
   els.statusText.textContent = '';
 
   let active;
@@ -275,7 +393,8 @@ els.startBtn.addEventListener('click', async () => {
   }
   if (!active) {
     els.statusText.textContent = 'Open Spotify on your phone, then hit Start again.';
-    els.startBtn.disabled = false;
+    startBusy = false;
+    syncStartEnabled();
     return;
   }
   deviceId = active.id;
@@ -288,7 +407,8 @@ els.startBtn.addEventListener('click', async () => {
   } catch (e) {
     console.error(e);
     els.statusText.textContent = 'Could not start playback — try again.';
-    els.startBtn.disabled = false;
+    startBusy = false;
+    syncStartEnabled();
     return;
   }
 
@@ -299,14 +419,16 @@ els.startBtn.addEventListener('click', async () => {
     paused: false,
     pausedAt: null,
   };
+  playedIds = new Set();
 
-  els.adjustNotice.hidden = combo.exact;
-  if (!combo.exact) {
-    els.adjustNotice.textContent = `Closest match: ${fmt(combo.seconds)} (asked for ${fmt(targetSeconds)})`;
-  }
+  for (const t of ordered) usedTrackIds.add(t.id);
+  saveUsedTrackIds();
+
+  renderAdjustNotice(combo, targetSeconds, reused);
 
   els.pauseBtn.textContent = 'Pause';
-  els.startBtn.disabled = false;
+  startBusy = false;
+  syncStartEnabled();
 
   clearNowPlaying();
   renderQueue();
@@ -314,40 +436,82 @@ els.startBtn.addEventListener('click', async () => {
 
   showScreen('live');
   startLiveUpdates();
+
+  // Next timer's pool has to exclude what we just queued.
+  rebuildIndexesSoon();
 });
+
+function renderAdjustNotice(combo, targetSeconds, reused) {
+  const parts = [];
+  if (!combo.exact) {
+    parts.push(`Closest match: ${fmt(combo.seconds)} (asked for ${fmt(targetSeconds)})`);
+  }
+  if (reused) parts.push('Reused songs — running low on new ones.');
+  els.adjustNotice.textContent = parts.join(' · ');
+  els.adjustNotice.hidden = parts.length === 0;
+}
+
+// Fire just past the boundary rather than exactly on it, so a clock read a
+// hair early can't display the second we're leaving.
+const TICK_EPSILON_MS = 15;
+
+/**
+ * Schedules the next countdown tick to land on the next second boundary,
+ * recomputed from the wall clock every time.
+ *
+ * A fixed setInterval(1000) cannot do this: it guarantees *at least* 1000ms,
+ * so each tick lands a few ms late and the sampled fraction of a second creeps
+ * downward. Whenever it crosses a rounding boundary between two ticks the
+ * displayed integer drops by 2 and a number is skipped (0:58 -> 0:56). Driving
+ * off the boundary makes every tick self-correcting, so drift can't accumulate.
+ */
+function scheduleTick() {
+  clearTimeout(tickHandle);
+  if (!session || session.paused) return;
+  const remainingMs = session.endAt - Date.now();
+  if (remainingMs <= 0) {
+    updateCountdown();
+    return;
+  }
+  const delay = (remainingMs % 1000) || 1000; // when the displayed value next changes
+  tickHandle = setTimeout(() => {
+    updateCountdown();
+    updateTrackTime();
+    scheduleTick();
+  }, delay + TICK_EPSILON_MS);
+}
 
 function startLiveUpdates() {
   stopLiveUpdates();
-  tickHandle = setInterval(() => {
-    if (!session || session.paused) return;
-    updateCountdown();
-    updateTrackTime();
-  }, 1000);
-
   pollHandle = setInterval(refreshNowPlaying, 5000);
   document.addEventListener('visibilitychange', onVisibilityChange);
   refreshNowPlaying();
   updateCountdown();
+  scheduleTick();
 }
 
 function stopLiveUpdates() {
-  clearInterval(tickHandle);
+  clearTimeout(tickHandle);
   clearInterval(pollHandle);
   document.removeEventListener('visibilitychange', onVisibilityChange);
 }
 
 function onVisibilityChange() {
-  // snap the display to the correct value immediately on return, rather than
-  // waiting up to 1s for the next tick — matters after the tab/screen was
-  // backgrounded and timers were throttled
+  // Snap the display to the correct value immediately on return and re-anchor
+  // the tick — background tabs throttle timers, so the pending one is likely
+  // both late and no longer aligned to a second boundary.
   if (document.visibilityState === 'visible' && session && !session.paused) {
     updateCountdown();
+    updateTrackTime();
+    scheduleTick();
   }
 }
 
 function updateCountdown() {
   if (!session) return;
-  const remaining = Math.max(0, Math.round((session.endAt - Date.now()) / 1000));
+  // Ceil, so the timer reads its starting value for a full second and hits
+  // 0:00 exactly at endAt rather than half a second early.
+  const remaining = Math.max(0, Math.ceil((session.endAt - Date.now()) / 1000));
   els.countdown.textContent = fmt(remaining);
   const pct = 100 * (1 - remaining / session.totalSeconds);
   els.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
@@ -378,6 +542,10 @@ async function refreshNowPlaying() {
     const art = item.album?.images?.[item.album.images.length - 1]?.url;
     els.albumArt.hidden = !art;
     if (art) els.albumArt.src = art;
+
+    // Only count tracks from our own queue: once it runs out Spotify autoplays
+    // something unrelated, and this endpoint reports that just the same.
+    if (session?.tracks.some((t) => t.id === item.id)) playedIds.add(item.id);
 
     track = {
       id: item.id,
@@ -457,6 +625,7 @@ function finishSession() {
 
 els.cancelBtn.addEventListener('click', async () => {
   stopLiveUpdates();
+  releaseUnplayedTracks();
   try { await spotify.pausePlayback(deviceId); } catch (e) { /* ignore */ }
   session = null;
   track = null;
@@ -469,18 +638,22 @@ els.pauseBtn.addEventListener('click', async () => {
   els.pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
 
   if (session.paused) {
+    clearTimeout(tickHandle);
     session.pausedAt = Date.now();
     // freeze the per-track clock by banking the elapsed time so far
     if (track) {
       track.progressSec = Math.min(track.durationSec, track.progressSec + (Date.now() - track.at) / 1000);
       track.at = Date.now();
     }
-  } else if (session.pausedAt) {
-    session.endAt += Date.now() - session.pausedAt;
-    session.pausedAt = null;
+  } else {
+    if (session.pausedAt) {
+      session.endAt += Date.now() - session.pausedAt;
+      session.pausedAt = null;
+    }
     if (track) track.at = Date.now();
     updateCountdown();
     updateTrackTime();
+    scheduleTick();
   }
 
   try {

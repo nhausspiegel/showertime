@@ -4,6 +4,8 @@
   --dim: #74797B;
   --accent: #2F6B4F;
   --border: #D8DAD6;
+  --invalid: #B3524A;
+  --invalid-fill: rgba(179, 82, 74, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -132,6 +134,16 @@ button.ghost:hover, button.ghost:active {
 .duration-input input:focus {
   outline: none;
   border-bottom-color: var(--accent);
+}
+
+/* Invalid times are typed, not blocked: digit-shift entry has to pass through
+   states like 00:80 on the way to 08:00, so the keystroke can't be the thing
+   that's validated. Flag the committed value instead. Listed after :focus so
+   an invalid field still reads as invalid while focused. */
+.duration-input input.invalid,
+.duration-input input.invalid:focus {
+  border-bottom-color: var(--invalid);
+  background: var(--invalid-fill);
 }
 
 #countdown {
