@@ -580,6 +580,7 @@ els.startBtn.addEventListener('click', async () => {
 
   session = makeSession(ordered, combo.seconds);
   queueConfirmed = false;
+  resetSkipState(); // never inherit a stuck skip guard from a previous timer
   claim(ordered.map((t) => t.id));
 
   renderAdjustNotice(combo, targetSeconds, reused);
@@ -853,6 +854,7 @@ function renderQueue() {
 
 function finishSession() {
   stopLiveUpdates();
+  resetSkipState();
   session = null;
   track = null;
   playChime();
@@ -910,8 +912,10 @@ function scheduleSkipRequeue() {
   const myToken = ++skipToken;
   clearTimeout(skipTimer);
   skipTimer = setTimeout(async () => {
-    if (myToken !== skipToken || !session || session.paused) return;
-    const current = session.tracks[session.currentIdx];
+    if (myToken !== skipToken) return; // superseded by a newer tap — it owns the guard
+    // If the session ended or paused before this fired, release the guard —
+    // leaving it set would freeze the next timer's now-playing poll.
+    const current = session && !session.paused ? session.tracks[session.currentIdx] : null;
     if (!current) { skipActive = false; return; }
     const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
     session.lastRecalcAt = Date.now();
@@ -923,6 +927,14 @@ function scheduleSkipRequeue() {
       if (myToken === skipToken) skipActive = false; // only the newest re-queue clears the guard
     }
   }, SKIP_COALESCE_MS);
+}
+
+// Skip state must never survive into another timer — a stuck skipActive makes
+// the poll return early forever, freezing now-playing. Reset it on every
+// session start and teardown.
+function resetSkipState() {
+  skipActive = false;
+  clearTimeout(skipTimer);
 }
 
 /** Runs an async action with a spinner on `btn`, restoring it after. */
@@ -1121,6 +1133,7 @@ function detachSwipe() {
 els.cancelBtn.addEventListener('click', async () => {
   haptic(12);
   stopLiveUpdates();
+  resetSkipState();
   releaseUnplayedTracks();
   try { await spotify.pausePlayback(deviceId); } catch (e) { /* ignore */ }
   session = null;

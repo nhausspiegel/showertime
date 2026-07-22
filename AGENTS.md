@@ -144,6 +144,13 @@ track. While a skip is coalescing (`skipActive`), `refreshNowPlaying()` returns
 early, and it also ignores any poll whose track is *behind* `currentIdx` — that
 report is just the device lagging the optimistic skips, not a rewind.
 
+**`skipActive` must never survive a session.** If a skip's coalesced re-queue is
+cut short by teardown (cancel/pause/timer-end inside the ~300ms window), the
+guard has to be released or the *next* timer's poll returns early forever and
+now-playing freezes — this shipped once as a "music won't start / wrong song"
+morning outage. `resetSkipState()` runs on every session start and teardown, and
+the coalesce timer clears the guard on its dead-end path.
+
 ### Changing the queue (reorder / delete) reloads the current track
 
 Reorder and delete both re-send the play list, and Spotify has no queue-edit
