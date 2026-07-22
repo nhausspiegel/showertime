@@ -47,6 +47,31 @@ the dashboard under **User Management** (being the app owner does *not*
 self-grant). Extended Quota Mode now requires ≥250k MAU via partner
 application, so it is not reachable for a personal project. Don't suggest it.
 
+### The live queue is one array with a moving cursor — the total is fixed
+
+`session.tracks` holds the whole queue in order; `session.currentIdx` is the
+playing track, everything before it is history (`session.outcomes[id]` records
+`played` vs `skippedAfterSec`). Skip, drag-reorder, and drift-recalc only ever
+rewrite the slice *after* `currentIdx`; history never moves. `renderQueue`
+prints the bottom total from `session.totalSeconds` — the timer length, fixed at
+Start. **Never make it a live `reduce` over durations**: that's the number that
+"jumped on skip" and the bug we fixed. A skipped row shows its real played time
+(`skipped M:SS`) so the visible rows still reconcile to that fixed total.
+
+### Hover fills must be gated to hover devices, or they stick on touch
+
+`button:hover` and `button:active` must not share a fill rule. On touch, `:hover`
+sticks after a tap until you tap elsewhere, so the last-tapped button stays
+highlighted (reported bug). Hover fills live under
+`@media (hover: hover) and (pointer: fine)`; `:active` is the touch press state.
+
+### Album-art self-heal is the one sanctioned extra fetch on load
+
+`buildPoolAndIndex()` treats a cache lacking the `art` field as needing a
+refresh (`cacheHasArt`), so pre-art caches refetch **once** and then carry art.
+Every later reload is fresh again → still zero top-tracks requests. Don't broaden
+this into refetching art-ful caches, and don't bump the cache key to force it.
+
 ### `[hidden]` needs `!important` here — do not "clean it up"
 
 `style.css` has `[hidden] { display: none !important }`. It is load-bearing.

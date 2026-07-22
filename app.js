@@ -11,6 +11,7 @@ const els = {
   durationInput: document.getElementById('duration'),
   startBtn: document.getElementById('start-btn'),
   statusText: document.getElementById('status-text'),
+  loadSpinner: document.getElementById('load-spinner'),
   nowPlaying: document.getElementById('now-playing'),
   albumArt: document.getElementById('album-art'),
   trackTime: document.getElementById('track-time'),
@@ -19,19 +20,24 @@ const els = {
   queueList: document.getElementById('queue-list'),
   queueTotal: document.getElementById('queue-total'),
   countdown: document.getElementById('countdown'),
+  elapsed: document.getElementById('elapsed'),
+  totalTime: document.getElementById('total-time'),
   progressBar: document.getElementById('progress-bar'),
+  skipBtn: document.getElementById('skip-btn'),
   cancelBtn: document.getElementById('cancel-btn'),
   pauseBtn: document.getElementById('pause-btn'),
   adjustNotice: document.getElementById('adjust-notice'),
 };
 
+// The live queue is one ordered array: tracks[0..currentIdx-1] have passed
+// (see `outcomes`), tracks[currentIdx] is playing, the rest are upcoming.
+// Recalc and skip only ever rewrite the upcoming slice, so history stays put.
 let pool = null; // { short, medium, long } — raw lists, kept so indexes rebuild without refetching
 let fullIndex = null; // subset-sum index over the whole pool
 let availableIndex = null; // ...over only the tracks that haven't played this session
 let deviceId = null;
-let session = null; // { tracks, totalSeconds, endAt, paused, pausedAt }
+let session = null; // see makeSession()
 let track = null; // { id, durationSec, progressSec, at } — last poll of the current track
-let playedIds = new Set(); // ids from the current session Spotify actually reached
 let queueConfirmed = false; // has a poll yet reported one of our own tracks playing?
 let pollHandle = null;
 let tickHandle = null;
@@ -59,6 +65,19 @@ function playChime() {
     osc.start(now + delay);
     osc.stop(now + delay + 0.6);
   });
+}
+
+/** Short vibration on a control press. No-op on browsers without the Vibration
+ *  API (notably iOS Safari), so it's always safe to call. */
+function haptic(ms = 10) {
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try { navigator.vibrate(ms); } catch (e) { /* ignore */ }
+  }
+}
+
+/** Spinner-in-place on a button while an async action runs. */
+function setBusy(el, on) {
+  el.classList.toggle('busy', on);
 }
 
 // Every id referenced above must exist in index.html. Without this check a
@@ -202,6 +221,7 @@ async function init() {
   libraryReady = false;
   syncStartEnabled();
   els.statusText.textContent = 'Loading your library…';
+  els.loadSpinner.hidden = false;
 
   try {
     const result = await buildPoolAndIndex();
@@ -215,6 +235,8 @@ async function init() {
     els.statusText.textContent = e.status === 429
       ? 'Spotify is rate-limiting requests — wait a moment, then reload.'
       : 'Could not load your library — try reloading.';
+  } finally {
+    els.loadSpinner.hidden = true;
   }
 }
 
@@ -240,6 +262,13 @@ function saveLibraryCache(short, medium, long) {
   }
 }
 
+// A cache is only usable if it carries album art — older caches predate the
+// `art` field, and without it the live view can't show art until the first
+// poll. Treat an art-less cache as needing a (one-time) refresh.
+function cacheHasArt(cached) {
+  return !!(cached && cached.short && cached.short[0] && 'art' in cached.short[0]);
+}
+
 /**
  * Builds the pool + matcher index, preferring a fresh-enough cache over the
  * network so reloading is idempotent and can't retrigger Spotify's rate
@@ -248,7 +277,7 @@ function saveLibraryCache(short, medium, long) {
  */
 async function buildPoolAndIndex() {
   const cached = loadLibraryCache();
-  const fresh = cached && (Date.now() - cached.cachedAt < LIBRARY_CACHE_TTL_MS);
+  const fresh = cached && cacheHasArt(cached) && (Date.now() - cached.cachedAt < LIBRARY_CACHE_TTL_MS);
 
   if (fresh) {
     setPool(cached.short, cached.medium, cached.long);
@@ -303,6 +332,16 @@ function saveUsedTrackIds() {
   }
 }
 
+function claim(ids) {
+  for (const id of ids) usedTrackIds.add(id);
+  saveUsedTrackIds();
+}
+
+function release(ids) {
+  for (const id of ids) usedTrackIds.delete(id);
+  saveUsedTrackIds();
+}
+
 function setPool(short, medium, long) {
   pool = { short, medium, long };
   rebuildIndexes();
@@ -348,100 +387,149 @@ function pickCombo(targetSeconds) {
   return { combo: full, reused: full.tracks.some((t) => usedTrackIds.has(t.id)) };
 }
 
-/** Cancelling early shouldn't burn tracks that never actually played. */
+/** Preload album art so the live view shows it instantly, not after a poll. */
+function preloadArt(tracks) {
+  if (typeof Image === 'undefined') return;
+  for (const t of tracks) {
+    if (t.art) { const img = new Image(); img.src = t.art; }
+  }
+}
+
+// --- Session -------------------------------------------------------------
+
+function makeSession(ordered, totalSeconds) {
+  return {
+    tracks: ordered,        // [...history, current, ...upcoming]
+    currentIdx: 0,          // index of the track playing now
+    outcomes: {},           // id -> { played:true } | { skippedAfterSec:n } for passed tracks
+    currentProgressSec: 0,  // last observed progress of the current track
+    totalSeconds,           // the timer length — the fixed queue total, never recomputed
+    endAt: Date.now() + totalSeconds * 1000,
+    paused: false,
+    pausedAt: null,
+    lastRecalcAt: Date.now(), // suppress drift recalc while playback stabilizes
+  };
+}
+
+function upcomingTracks() {
+  return session ? session.tracks.slice(session.currentIdx + 1) : [];
+}
+
+/** Cancelling early shouldn't burn tracks that never actually played — only
+ *  the current track and history are kept claimed. */
 function releaseUnplayedTracks() {
   if (!session) return;
-  for (const t of session.tracks) {
-    if (!playedIds.has(t.id)) usedTrackIds.delete(t.id);
-  }
-  saveUsedTrackIds();
+  const from = queueConfirmed ? session.currentIdx + 1 : 0;
+  release(session.tracks.slice(from).map((t) => t.id));
   rebuildIndexesSoon();
+}
+
+/** Marks tracks passed over (naturally finished or skipped) with an outcome,
+ *  then advances the current pointer and re-renders the queue. */
+function advanceCurrentTo(newIdx) {
+  for (let j = session.currentIdx; j < newIdx; j++) {
+    const t = session.tracks[j];
+    if (session.outcomes[t.id]) continue;
+    if (j === session.currentIdx) {
+      // The one we were actually watching: played out if its last seen progress
+      // reached (near) the end, otherwise skipped partway.
+      const played = session.currentProgressSec;
+      session.outcomes[t.id] = played >= t.durationSec - 8
+        ? { played: true }
+        : { skippedAfterSec: Math.max(0, played) };
+    } else {
+      session.outcomes[t.id] = { skippedAfterSec: 0 }; // jumped clean over — never heard
+    }
+  }
+  session.currentIdx = newIdx;
+  renderQueue();
 }
 
 // The music was solved to end exactly when the timer does. Skipping a track
 // (or seeking, or replaying) breaks that: the queued songs no longer sum to
-// the time left. These bounds re-solve the tail when they've drifted apart.
+// the time left. These bounds re-solve the upcoming tracks when they've
+// drifted apart.
 const DRIFT_THRESHOLD_SEC = 10; // below this is normal poll jitter and rounding — leave it
 const RECALC_COOLDOWN_MS = 8000; // let a re-queue reach the device before checking again
 
 /**
+ * Re-solves the upcoming tracks to fill `targetSec` and re-queues them behind
+ * the current song. Returns the new upcoming array, or null if nothing changed.
+ * `force` re-issues playback even when the tail is unchanged — needed for skip,
+ * where the head itself moved and the device must actually jump to it.
+ */
+async function requeueUpcoming(targetSec, positionMs, { force = false } = {}) {
+  const idx = session.currentIdx;
+  const current = session.tracks[idx];
+  const oldUpcoming = session.tracks.slice(idx + 1);
+
+  const picked = targetSec > 0 ? pickCombo(targetSec) : null;
+  const excluded = new Set(session.tracks.slice(0, idx + 1).map((t) => t.id));
+  const newUpcoming = (picked ? shuffle(picked.combo.tracks) : []).filter((t) => !excluded.has(t.id));
+
+  const same = oldUpcoming.length === newUpcoming.length &&
+    oldUpcoming.every((t, i) => t.id === newUpcoming[i].id);
+  if (same && !force) return null;
+
+  const keepIds = new Set(newUpcoming.map((t) => t.id));
+  // Dropped, never-played tracks are freed for a later timer; claim the new set.
+  release(oldUpcoming.filter((t) => !keepIds.has(t.id) && !session.outcomes[t.id]).map((t) => t.id));
+  claim(newUpcoming.map((t) => t.id));
+
+  session.tracks = session.tracks.slice(0, idx + 1).concat(newUpcoming);
+  session.lastRecalcAt = Date.now();
+
+  await spotify.playTracks([current.uri, ...newUpcoming.map((t) => t.uri)], deviceId, { positionMs });
+  renderQueue();
+  rebuildIndexesSoon();
+  return newUpcoming;
+}
+
+/**
  * Keeps the music ending with the timer. Called from the now-playing poll with
  * the track Spotify says is playing. If the remaining music has drifted from
- * the remaining time by more than the threshold, re-solves the tracks after
- * the current one to fill exactly the gap, and re-queues them behind the
- * current song without interrupting it.
+ * the remaining time by more than the threshold, re-solves the upcoming tracks.
  */
 async function maybeRecalcQueue(item, progressMs) {
   if (!session || session.paused) return;
+  if (drag) return; // don't rebuild the queue out from under an in-progress drag
   if (Date.now() - (session.lastRecalcAt || 0) < RECALC_COOLDOWN_MS) return;
 
-  // Only maintain the queue while the user is actually playing it. If they've
-  // wandered off to something else, re-queuing our tracks would hijack them.
-  const idx = session.tracks.findIndex((t) => t.id === item.id);
-  if (idx < 0) return;
+  const idx = session.currentIdx;
+  const current = session.tracks[idx];
+  if (!current || current.id !== item.id) return; // not cleanly on the current track — leave it
 
-  const currentRemainSec = Math.max(0, Math.round(item.duration_ms / 1000) - Math.round(progressMs / 1000));
+  const currentRemainSec = Math.max(0, current.durationSec - Math.round(progressMs / 1000));
   const tailSec = session.tracks.slice(idx + 1).reduce((n, t) => n + t.durationSec, 0);
   const remainingMusic = currentRemainSec + tailSec;
   const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
   if (Math.abs(remainingMusic - remainingTimer) <= DRIFT_THRESHOLD_SEC) return;
 
-  // Solve the tail for the time left once the current track finishes.
-  const target = Math.round(remainingTimer - currentRemainSec);
-  const picked = target > 0 ? pickCombo(target) : null;
-  const newTail = (picked ? shuffle(picked.combo.tracks) : [])
-    .filter((t) => t.id !== item.id); // never let the tail replay the current song
-
-  // If the solve lands on the same tracks already queued after the current one,
-  // the drift is in the timing, not the queue — re-queuing would only cause an
-  // audible blip for no change. Bank the cooldown and skip the network call.
-  const sameTail = (a, b) => a.length === b.length && a.every((t, i) => t.id === b[i].id);
-  if (sameTail(newTail, session.tracks.slice(idx + 1))) {
-    session.lastRecalcAt = Date.now();
-    return;
-  }
-
-  const current = session.tracks[idx];
-  const keep = new Set([current.id, ...newTail.map((t) => t.id)]);
-  // Tracks we're dropping that never played are freed for a later timer; the
-  // new tail is claimed. Pick ran before this, so it couldn't grab the old
-  // tail — the fresh tail is genuinely fresh.
-  for (const t of session.tracks) {
-    if (!keep.has(t.id) && !playedIds.has(t.id)) usedTrackIds.delete(t.id);
-  }
-  for (const t of newTail) usedTrackIds.add(t.id);
-  saveUsedTrackIds();
-
-  session.tracks = [current, ...newTail];
-  session.lastRecalcAt = Date.now();
-
   try {
-    await spotify.playTracks([current.uri, ...newTail.map((t) => t.uri)], deviceId, {
-      positionMs: Math.max(0, progressMs),
-    });
+    const changed = await requeueUpcoming(Math.round(remainingTimer - currentRemainSec), Math.max(0, progressMs));
+    if (changed === null) session.lastRecalcAt = Date.now(); // same solve — bank cooldown, no blip
   } catch (e) {
-    console.error(e);
-    return; // leave the display alone if the re-queue didn't take
+    console.error(e); // leave the display alone if the re-queue didn't take
   }
-
-  renderQueue();
-  markCurrentInQueue();
-  rebuildIndexesSoon();
 }
 
-els.connectBtn.addEventListener('click', () => auth.connect());
+els.connectBtn.addEventListener('click', () => { haptic(); auth.connect(); });
 
 function setQueueOpen(open) {
-  els.queuePanel.hidden = !open;
+  els.queuePanel.classList.toggle('open', open);
   els.queueTotal.hidden = !open;
   els.queueToggle.setAttribute('aria-expanded', String(open));
   els.queueToggle.textContent = open ? 'Hide queue' : 'Queue';
 }
 
-els.queueToggle.addEventListener('click', () => setQueueOpen(els.queuePanel.hidden));
+els.queueToggle.addEventListener('click', () => {
+  haptic();
+  setQueueOpen(!els.queuePanel.classList.contains('open'));
+});
 
 els.startBtn.addEventListener('click', async () => {
   primeAudio();
+  haptic();
   const { valid, totalSeconds: targetSeconds } = durationSeconds();
   if (!valid) return;
 
@@ -453,6 +541,7 @@ els.startBtn.addEventListener('click', async () => {
   const { combo, reused } = picked;
 
   startBusy = true;
+  setBusy(els.startBtn, true);
   syncStartEnabled();
   els.statusText.textContent = '';
 
@@ -466,12 +555,14 @@ els.startBtn.addEventListener('click', async () => {
   if (!active) {
     els.statusText.textContent = 'Open Spotify on your phone, then hit Start again.';
     startBusy = false;
+    setBusy(els.startBtn, false);
     syncStartEnabled();
     return;
   }
   deviceId = active.id;
 
   const ordered = shuffle(combo.tracks);
+  preloadArt(ordered); // download art in parallel with the play request
 
   try {
     await spotify.setRepeatOff(deviceId).catch(() => {});
@@ -481,28 +572,22 @@ els.startBtn.addEventListener('click', async () => {
     console.error(e);
     els.statusText.textContent = 'Could not start playback — try again.';
     startBusy = false;
+    setBusy(els.startBtn, false);
     syncStartEnabled();
     return;
   }
 
-  session = {
-    tracks: ordered,
-    totalSeconds: combo.seconds,
-    endAt: Date.now() + combo.seconds * 1000,
-    paused: false,
-    pausedAt: null,
-    lastRecalcAt: Date.now(), // suppress drift recalc while playback stabilizes
-  };
-  playedIds = new Set();
+  session = makeSession(ordered, combo.seconds);
   queueConfirmed = false;
-
-  for (const t of ordered) usedTrackIds.add(t.id);
-  saveUsedTrackIds();
+  claim(ordered.map((t) => t.id));
 
   renderAdjustNotice(combo, targetSeconds, reused);
 
-  els.pauseBtn.textContent = 'Pause';
+  els.pauseBtn.classList.remove('is-paused');
+  els.pauseBtn.setAttribute('aria-label', 'Pause');
+  els.totalTime.textContent = fmt(session.totalSeconds);
   startBusy = false;
+  setBusy(els.startBtn, false);
   syncStartEnabled();
 
   // Show the first queued track immediately. The player-state poll is
@@ -592,6 +677,7 @@ function updateCountdown() {
   // 0:00 exactly at endAt rather than half a second early.
   const remaining = Math.max(0, Math.ceil((session.endAt - Date.now()) / 1000));
   els.countdown.textContent = fmt(remaining);
+  els.elapsed.textContent = fmt(session.totalSeconds - remaining);
   const pct = 100 * (1 - remaining / session.totalSeconds);
   els.progressBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
   if (remaining <= 0) finishSession();
@@ -624,7 +710,6 @@ function renderNowPlaying(t, progressSec) {
   if (t.art) els.albumArt.src = t.art;
   track = { id: t.id, durationSec: t.durationSec, progressSec, at: Date.now() };
   updateTrackTime();
-  markCurrentInQueue();
 }
 
 async function refreshNowPlaying() {
@@ -640,19 +725,24 @@ async function refreshNowPlaying() {
       return;
     }
 
-    const isOurs = !!session?.tracks.some((t) => t.id === item.id);
+    const reportedIdx = session ? session.tracks.findIndex((t) => t.id === item.id) : -1;
+    const isOurs = reportedIdx >= 0;
 
     // Until our own queue shows up, ignore whatever Spotify reports: its
     // player state lags, so the first polls after Start still name the
     // previously playing track. The optimistic render already shows ours.
     if (!isOurs && !queueConfirmed) return;
 
+    const progressSec = Math.round((playing.progress_ms || 0) / 1000);
+
     if (isOurs) {
       queueConfirmed = true;
-      playedIds.add(item.id); // count only our tracks — autoplay after the queue isn't ours
+      if (reportedIdx > session.currentIdx) advanceCurrentTo(reportedIdx);
+      else if (reportedIdx < session.currentIdx) { session.currentIdx = reportedIdx; renderQueue(); }
+      session.currentProgressSec = progressSec;
     }
 
-    renderNowPlaying(trackFromApiItem(item), Math.round((playing.progress_ms || 0) / 1000));
+    renderNowPlaying(trackFromApiItem(item), progressSec);
 
     if (isOurs) await maybeRecalcQueue(item, playing.progress_ms || 0);
   } catch (e) {
@@ -666,18 +756,37 @@ async function refreshNowPlaying() {
  */
 function updateTrackTime() {
   if (!track) return;
-  const elapsed = (Date.now() - track.at) / 1000;
-  const progress = Math.min(track.durationSec, track.progressSec + elapsed);
-  els.trackTime.textContent = `${fmt(progress)} / ${fmt(track.durationSec)}`;
+  els.trackTime.textContent = `${fmt(currentInterpProgressSec())} / ${fmt(track.durationSec)}`;
 }
+
+/** Current track progress in seconds, interpolated between polls. */
+function currentInterpProgressSec() {
+  if (!track) return 0;
+  const elapsed = (Date.now() - track.at) / 1000;
+  return Math.min(track.durationSec, track.progressSec + elapsed);
+}
+
+const GRIP_SVG = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>';
 
 function renderQueue() {
   els.queueList.replaceChildren();
   if (!session) return;
 
-  for (const t of session.tracks) {
+  session.tracks.forEach((t, i) => {
     const li = document.createElement('li');
     li.dataset.trackId = t.id;
+    const isCurrent = i === session.currentIdx;
+    const isPast = i < session.currentIdx;
+    const isUpcoming = i > session.currentIdx;
+    if (isCurrent) li.classList.add('current');
+    if (isPast) li.classList.add('played');
+    if (isUpcoming) li.classList.add('upcoming');
+
+    // A grip slot on every row keeps titles aligned; only upcoming rows fill
+    // it with an actual (draggable) handle.
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    if (isUpcoming) grip.innerHTML = GRIP_SVG;
 
     const title = document.createElement('span');
     title.className = 'queue-title';
@@ -689,30 +798,26 @@ function renderQueue() {
 
     const dur = document.createElement('span');
     dur.className = 'queue-duration';
-    dur.textContent = fmt(t.durationSec);
+    const outcome = session.outcomes[t.id];
+    if (isPast && outcome && outcome.skippedAfterSec != null) {
+      // A skipped track shows the time it actually played, so the visible rows
+      // still reconcile to the fixed total even after an early skip.
+      dur.textContent = outcome.skippedAfterSec > 0 ? `skipped ${fmt(outcome.skippedAfterSec)}` : 'skipped';
+      li.classList.add('skipped');
+    } else {
+      dur.textContent = fmt(t.durationSec);
+    }
 
-    li.append(title, dur);
+    li.append(grip, title, dur);
     els.queueList.append(li);
-  }
+  });
 
-  const sum = session.tracks.reduce((n, t) => n + t.durationSec, 0);
   els.queueTotal.replaceChildren();
   const label = document.createElement('span');
   label.textContent = `${session.tracks.length} tracks`;
   const total = document.createElement('span');
-  total.textContent = fmt(sum);
+  total.textContent = fmt(session.totalSeconds); // fixed timer length — never recomputed
   els.queueTotal.append(label, total);
-}
-
-/** Dims tracks already played and highlights the one currently sounding. */
-function markCurrentInQueue() {
-  let seenCurrent = false;
-  for (const li of els.queueList.children) {
-    const isCurrent = !!track && li.dataset.trackId === track.id;
-    if (isCurrent) seenCurrent = true;
-    li.classList.toggle('current', isCurrent);
-    li.classList.toggle('played', !isCurrent && !seenCurrent);
-  }
 }
 
 function finishSession() {
@@ -720,10 +825,140 @@ function finishSession() {
   session = null;
   track = null;
   playChime();
+  haptic([12, 60, 12]);
   showScreen('home');
 }
 
+// --- Skip ----------------------------------------------------------------
+
+els.skipBtn.addEventListener('click', async () => {
+  if (!session || session.paused) return;
+  const idx = session.currentIdx;
+  const current = session.tracks[idx];
+  if (!current) return;
+  haptic(12);
+
+  // Record the skip so the queue shows "skipped M:SS" for it.
+  session.outcomes[current.id] = { skippedAfterSec: Math.min(current.durationSec, Math.round(currentInterpProgressSec())) };
+  session.currentProgressSec = 0;
+
+  const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
+  const next = session.tracks[idx + 1];
+
+  await setBusyDuring(els.skipBtn, async () => {
+    if (next) {
+      // Advance to the queued next track, refit the rest, re-queue from its start.
+      session.currentIdx = idx + 1;
+      session.lastRecalcAt = Date.now();
+      track = null;
+      renderQueue();
+      renderNowPlaying(next, 0);
+      await requeueUpcoming(Math.round(remainingTimer - next.durationSec), 0, { force: true });
+    } else {
+      // Skipped the last queued track — solve a whole fresh queue for the time
+      // left and play it from the top.
+      const picked = remainingTimer > 1 ? pickCombo(Math.round(remainingTimer)) : null;
+      const fresh = picked ? shuffle(picked.combo.tracks).filter((t) => t.id !== current.id) : [];
+      if (fresh.length === 0) return; // no time / nothing left — let the timer run out
+      claim(fresh.map((t) => t.id));
+      session.tracks = session.tracks.slice(0, idx + 1).concat(fresh);
+      session.currentIdx = idx + 1;
+      session.lastRecalcAt = Date.now();
+      track = null;
+      renderQueue();
+      renderNowPlaying(fresh[0], 0);
+      try {
+        await spotify.playTracks(fresh.map((t) => t.uri), deviceId);
+      } catch (e) { console.error(e); }
+      rebuildIndexesSoon();
+    }
+  });
+});
+
+/** Runs an async action with a spinner on `btn`, restoring it after. */
+async function setBusyDuring(btn, fn) {
+  setBusy(btn, true);
+  try { return await fn(); }
+  finally { setBusy(btn, false); }
+}
+
+// --- Drag to reorder upcoming tracks ------------------------------------
+
+let drag = null;
+
+els.queueList.addEventListener('pointerdown', (e) => {
+  const grip = e.target.closest('.grip');
+  if (!grip) return;
+  const li = grip.closest('li');
+  if (!li || !li.classList.contains('upcoming') || !session) return;
+
+  const rows = [...els.queueList.querySelectorAll('li.upcoming')];
+  const fromPos = rows.indexOf(li);
+  if (fromPos < 0) return;
+
+  e.preventDefault();
+  const rowH = li.getBoundingClientRect().height;
+  drag = { li, rows, fromPos, toPos: fromPos, startY: e.clientY, rowH, pointerId: e.pointerId };
+  li.setPointerCapture(e.pointerId);
+  li.classList.add('dragging');
+  haptic(8);
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', onDragEnd);
+  window.addEventListener('pointercancel', onDragEnd);
+});
+
+function onDragMove(e) {
+  if (!drag) return;
+  const dy = e.clientY - drag.startY;
+  drag.li.style.transform = `translateY(${dy}px) scale(1.015)`;
+
+  const toPos = Math.max(0, Math.min(drag.rows.length - 1, drag.fromPos + Math.round(dy / drag.rowH)));
+  if (toPos === drag.toPos) return;
+  drag.toPos = toPos;
+  haptic(4);
+  // Slide the other upcoming rows to open a gap at the target slot.
+  drag.rows.forEach((row, i) => {
+    if (row === drag.li) return;
+    let shift = 0;
+    if (drag.fromPos < toPos && i > drag.fromPos && i <= toPos) shift = -drag.rowH;
+    else if (drag.fromPos > toPos && i >= toPos && i < drag.fromPos) shift = drag.rowH;
+    row.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+
+async function onDragEnd() {
+  if (!drag) return;
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  window.removeEventListener('pointercancel', onDragEnd);
+  const { li, fromPos, toPos, rows } = drag;
+  li.classList.remove('dragging');
+  for (const r of rows) r.style.transform = '';
+  drag = null;
+
+  if (fromPos === toPos || !session) return;
+
+  // Reorder the upcoming slice; history + current are untouched.
+  const start = session.currentIdx + 1;
+  const upcoming = session.tracks.slice(start);
+  const [moved] = upcoming.splice(fromPos, 1);
+  upcoming.splice(toPos, 0, moved);
+  session.tracks = session.tracks.slice(0, start).concat(upcoming);
+  session.lastRecalcAt = Date.now(); // durations are unchanged, so no refit — just keep drift off our backs
+  renderQueue();
+
+  const current = session.tracks[session.currentIdx];
+  try {
+    await spotify.playTracks([current.uri, ...upcoming.map((t) => t.uri)], deviceId, {
+      positionMs: Math.round(currentInterpProgressSec() * 1000),
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 els.cancelBtn.addEventListener('click', async () => {
+  haptic(12);
   stopLiveUpdates();
   releaseUnplayedTracks();
   try { await spotify.pausePlayback(deviceId); } catch (e) { /* ignore */ }
@@ -734,15 +969,17 @@ els.cancelBtn.addEventListener('click', async () => {
 
 els.pauseBtn.addEventListener('click', async () => {
   if (!session) return;
+  haptic();
   session.paused = !session.paused;
-  els.pauseBtn.textContent = session.paused ? 'Resume' : 'Pause';
+  els.pauseBtn.classList.toggle('is-paused', session.paused);
+  els.pauseBtn.setAttribute('aria-label', session.paused ? 'Resume' : 'Pause');
 
   if (session.paused) {
     clearTimeout(tickHandle);
     session.pausedAt = Date.now();
     // freeze the per-track clock by banking the elapsed time so far
     if (track) {
-      track.progressSec = Math.min(track.durationSec, track.progressSec + (Date.now() - track.at) / 1000);
+      track.progressSec = currentInterpProgressSec();
       track.at = Date.now();
     }
   } else {
@@ -757,8 +994,8 @@ els.pauseBtn.addEventListener('click', async () => {
   }
 
   try {
-    if (session.paused) await spotify.pausePlayback(deviceId);
-    else await spotify.resumePlayback(deviceId);
+    await setBusyDuring(els.pauseBtn, () =>
+      session.paused ? spotify.pausePlayback(deviceId) : spotify.resumePlayback(deviceId));
   } catch (e) {
     console.error(e);
   }
