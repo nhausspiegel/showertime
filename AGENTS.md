@@ -80,6 +80,22 @@ distinct tracks across all of them.**
 never before** — dedupe is first-occurrence-wins, and that ordering is what
 gives short-term tracks precedence over medium/long in the layered pools.
 
+### Player-state polls lag — treat them as confirmation, not truth
+
+`/me/player/currently-playing` is eventually consistent: it reflects what the
+device last reported, so for the first few seconds after `playTracks()` it
+still names the track that was playing *before* Start. Rendering it blindly
+flashed the previous track for up to ~20s (≈4 poll cycles).
+
+`refreshNowPlaying()` now renders `session.tracks[0]` optimistically at Start
+and, via a `queueConfirmed` flag, ignores any poll naming a track outside
+`session.tracks` until the first one that matches. After confirmation it
+accepts everything, so a genuine mid-session change still shows. This adds
+**zero** requests — we already know what we queued.
+
+`playTracks()` is preceded by `setShuffleOff()` so the device can't reorder the
+uris, which is what makes `session.tracks[0]` reliably the track that starts.
+
 ### Countdown: never sample a clock on a fixed interval
 
 `setInterval(…, 1000)` guarantees *at least* 1000ms, so ticks land a few ms

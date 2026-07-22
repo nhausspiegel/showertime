@@ -32,6 +32,7 @@ let deviceId = null;
 let session = null; // { tracks, totalSeconds, endAt, paused, pausedAt }
 let track = null; // { id, durationSec, progressSec, at } — last poll of the current track
 let playedIds = new Set(); // ids from the current session Spotify actually reached
+let queueConfirmed = false; // has a poll yet reported one of our own tracks playing?
 let pollHandle = null;
 let tickHandle = null;
 let audioCtx = null;
@@ -403,6 +404,7 @@ els.startBtn.addEventListener('click', async () => {
 
   try {
     await spotify.setRepeatOff(deviceId).catch(() => {});
+    await spotify.setShuffleOff(deviceId).catch(() => {});
     await spotify.playTracks(ordered.map((t) => t.uri), deviceId);
   } catch (e) {
     console.error(e);
@@ -420,6 +422,7 @@ els.startBtn.addEventListener('click', async () => {
     pausedAt: null,
   };
   playedIds = new Set();
+  queueConfirmed = false;
 
   for (const t of ordered) usedTrackIds.add(t.id);
   saveUsedTrackIds();
@@ -430,8 +433,12 @@ els.startBtn.addEventListener('click', async () => {
   startBusy = false;
   syncStartEnabled();
 
-  clearNowPlaying();
+  // Show the first queued track immediately. The player-state poll is
+  // eventually consistent and reports the *previous* track for the first few
+  // seconds after Start, so trusting it here would flash stale data. We know
+  // what we queued — render it, and let refreshNowPlaying() confirm.
   renderQueue();
+  renderNowPlaying(ordered[0], 0);
   setQueueOpen(false);
 
   showScreen('live');
@@ -526,35 +533,54 @@ function clearNowPlaying() {
   els.albumArt.hidden = true;
 }
 
+/** Normalizes a currently-playing API item to the shape pool tracks use. */
+function trackFromApiItem(item) {
+  return {
+    id: item.id,
+    name: item.name,
+    artist: item.artists?.[0]?.name || '',
+    durationSec: Math.round(item.duration_ms / 1000),
+    art: item.album?.images?.[item.album.images.length - 1]?.url || '',
+  };
+}
+
+/** Renders one track into the now-playing row. Shared by the optimistic
+ *  render at Start and the confirmed render from the poll. */
+function renderNowPlaying(t, progressSec) {
+  els.nowPlaying.textContent = `${t.name} — ${t.artist}`;
+  els.albumArt.hidden = !t.art;
+  if (t.art) els.albumArt.src = t.art;
+  track = { id: t.id, durationSec: t.durationSec, progressSec, at: Date.now() };
+  updateTrackTime();
+  markCurrentInQueue();
+}
+
 async function refreshNowPlaying() {
   try {
     const playing = await spotify.getCurrentlyPlaying();
     const item = playing?.item;
+
     if (!item) {
-      clearNowPlaying();
+      // Before the queue is confirmed, an empty player is just the gap between
+      // our play request and Spotify reporting it — keep the optimistic row.
+      // After confirmation it means playback actually stopped.
+      if (queueConfirmed) clearNowPlaying();
       return;
     }
 
-    els.nowPlaying.textContent = `${item.name} — ${item.artists?.[0]?.name || ''}`;
+    const isOurs = !!session?.tracks.some((t) => t.id === item.id);
 
-    // Spotify sorts album images widest-first; the last one is the smallest
-    // that still covers our 56px slot at 2x.
-    const art = item.album?.images?.[item.album.images.length - 1]?.url;
-    els.albumArt.hidden = !art;
-    if (art) els.albumArt.src = art;
+    // Until our own queue shows up, ignore whatever Spotify reports: its
+    // player state lags, so the first polls after Start still name the
+    // previously playing track. The optimistic render already shows ours.
+    if (!isOurs && !queueConfirmed) return;
 
-    // Only count tracks from our own queue: once it runs out Spotify autoplays
-    // something unrelated, and this endpoint reports that just the same.
-    if (session?.tracks.some((t) => t.id === item.id)) playedIds.add(item.id);
+    if (isOurs) {
+      queueConfirmed = true;
+      playedIds.add(item.id); // count only our tracks — autoplay after the queue isn't ours
+    }
 
-    track = {
-      id: item.id,
-      durationSec: Math.round(item.duration_ms / 1000),
-      progressSec: Math.round((playing.progress_ms || 0) / 1000),
-      at: Date.now(),
-    };
-    updateTrackTime();
-    markCurrentInQueue();
+    renderNowPlaying(trackFromApiItem(item), Math.round((playing.progress_ms || 0) / 1000));
   } catch (e) {
     // non-fatal — live view keeps running off the local countdown
   }

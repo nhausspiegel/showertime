@@ -62,6 +62,10 @@ export async function fetchTopTracks(timeRange, { limit = 50 } = {}) {
     name: t.name,
     artist: t.artists?.[0]?.name || '',
     durationSec: Math.round(t.duration_ms / 1000),
+    // Spotify sorts album images widest-first; the last is the smallest that
+    // still covers the 56px art slot at 2x. Carried in the pool so the live
+    // view can show art the instant a track starts, before the first poll.
+    art: t.album?.images?.[t.album.images.length - 1]?.url || '',
   }));
 }
 
@@ -99,6 +103,14 @@ export async function resumePlayback(deviceId) {
 
 export async function setRepeatOff(deviceId) {
   await api(`/me/player/repeat${playerQuery(deviceId, { state: 'off' })}`, {
+    method: 'PUT',
+  });
+}
+
+export async function setShuffleOff(deviceId) {
+  // With shuffle on, Spotify reorders the uris we send, so the track we expect
+  // to play first (and show optimistically) might not be the one that starts.
+  await api(`/me/player/shuffle${playerQuery(deviceId, { state: 'false' })}`, {
     method: 'PUT',
   });
 }
