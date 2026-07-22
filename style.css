@@ -1,11 +1,34 @@
 :root {
-  --bg: #F2F3F1;
+  /* Surfaces — a warm off-white page with slightly lifted component surfaces,
+     so depth comes from light, not lines. */
+  --bg: #EEF0EB;
+  --bg-2: #E5E8E0;
+  --surface: #FBFCFA;
+  --surface-inset: #F4F6F1;
   --fg: #16181A;
-  --dim: #74797B;
+  --dim: #6E736F;
+  --faint: #A6ABA5;
   --accent: #2F6B4F;
-  --border: #D8DAD6;
+  --accent-hi: #3B8862;
+  --accent-ink: #FBFCFA;
+  --border: #E2E5DF;
+  --border-strong: #D3D7CE;
   --invalid: #B3524A;
   --invalid-fill: rgba(179, 82, 74, 0.08);
+
+  /* Layered soft shadows — the CleanMyMac-in-light feel. */
+  --shadow-sm: 0 1px 2px rgba(22, 24, 26, 0.05);
+  --shadow-md: 0 1px 2px rgba(22, 24, 26, 0.04), 0 8px 22px rgba(22, 24, 26, 0.07);
+  --shadow-lg: 0 2px 6px rgba(22, 24, 26, 0.05), 0 20px 48px rgba(22, 24, 26, 0.11);
+  --shadow-accent: 0 6px 18px rgba(47, 107, 79, 0.28);
+
+  --r-sm: 9px;
+  --r-md: 14px;
+  --r-lg: 22px;
+  --r-pill: 999px;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur: 0.26s;
 }
 
 * { box-sizing: border-box; }
@@ -21,9 +44,11 @@ html, body {
 }
 
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(120% 80% at 50% -10%, var(--bg) 0%, var(--bg-2) 100%);
   color: var(--fg);
   font-family: 'Bricolage Grotesque', -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -34,101 +59,218 @@ body {
 
 section {
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
   max-height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 24px;
+  gap: 26px;
+}
+
+/* Screens fade/rise in rather than snapping. */
+section:not([hidden]) {
+  animation: screen-in var(--dur) var(--ease);
+}
+
+@keyframes screen-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
 
 .label {
   color: var(--dim);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   margin: 0;
 }
 
 .status {
   color: var(--dim);
-  font-size: 14px;
+  font-size: 13.5px;
+  line-height: 1.4;
   margin: 0;
   min-height: 1em;
 }
 
+/* ---- Buttons ---------------------------------------------------------- */
+
 button {
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--fg);
-  border-radius: 2px;
-  padding: 14px 36px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  padding: 15px 40px;
   width: auto;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    background var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
 
-button:hover, button:active {
-  background: var(--fg);
-  color: var(--bg);
+/* Press feedback lives on :active so it fires on touch AND mouse. Hover fills
+   are gated to real hover devices below — otherwise a tapped button keeps its
+   :hover fill until you tap elsewhere, so only the last-tapped button looks
+   highlighted. */
+button:active {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: var(--shadow-sm);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
 }
 
 button:disabled {
-  opacity: 0.35;
+  opacity: 0.4;
   cursor: default;
-  background: transparent;
-  color: var(--fg);
+  transform: none;
+  box-shadow: var(--shadow-sm);
 }
 
 button.primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-button.primary:hover, button.primary:active {
-  background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+  box-shadow: var(--shadow-accent);
 }
 
 button.ghost {
-  border-color: var(--border);
   color: var(--dim);
+  background: transparent;
+  border-color: var(--border-strong);
+  box-shadow: none;
 }
 
-button.ghost:hover, button.ghost:active {
-  background: var(--dim);
-  color: var(--bg);
-  border-color: var(--dim);
+@media (hover: hover) and (pointer: fine) {
+  button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+  button.primary:hover {
+    box-shadow: var(--shadow-accent), var(--shadow-md);
+  }
+  button.ghost:hover {
+    color: var(--fg);
+    border-color: var(--fg);
+  }
+  button:disabled:hover {
+    transform: none;
+    box-shadow: var(--shadow-sm);
+  }
 }
+
+/* Round icon buttons for the live-screen transport controls. */
+button.icon {
+  padding: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+button.icon.primary {
+  width: 62px;
+  height: 62px;
+}
+
+button.icon.primary svg {
+  width: 26px;
+  height: 26px;
+}
+
+/* Pause button holds both glyphs; the class picks which shows. */
+#pause-btn .ico-play { display: none; }
+#pause-btn.is-paused .ico-pause { display: none; }
+#pause-btn.is-paused .ico-play { display: inline; }
+
+/* ---- Loading spinner -------------------------------------------------- */
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* A busy button hides its label and spins in place — one uniform loading
+   affordance for every non-instant action. */
+button.busy {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+
+button.busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(22, 24, 26, 0.15);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+button.primary.busy::after {
+  border-color: rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+}
+
+/* ---- Duration entry --------------------------------------------------- */
 
 .duration-input {
   display: flex;
   justify-content: center;
   font-variant-numeric: tabular-nums;
-  font-size: 56px;
-  font-weight: 250;
+  font-size: 64px;
+  font-weight: 300;
 }
 
 .duration-input input {
   /* ch is sized off the font's proportional "0" glyph, but tabular-nums
      figures render wider than that — pad generously so no digit clips. */
-  width: 6ch;
+  width: 5.4ch;
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid var(--border-strong);
   color: var(--fg);
   font: inherit;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   text-align: center;
-  padding: 4px 0;
+  padding: 6px 0;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 
 .duration-input input:focus {
@@ -146,65 +288,49 @@ button.ghost:hover, button.ghost:active {
   background: var(--invalid-fill);
 }
 
-#countdown {
-  font-variant-numeric: tabular-nums;
-  font-size: 72px;
-  font-weight: 250;
-  letter-spacing: -0.01em;
-}
-
-.progress-track {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
-}
-
-#progress-bar {
-  height: 100%;
-  width: 0%;
-  background: var(--accent);
-  transition: width 1s linear;
-}
-
-.controls {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-}
+/* ---- Live screen ------------------------------------------------------ */
 
 /* The live screen carries the most content, so it runs tighter than the
    others to stay inside one viewport without scrolling. */
 #live-screen {
-  gap: 16px;
+  gap: 18px;
 }
 
-#live-screen #countdown {
-  font-size: clamp(48px, 16vh, 72px);
+#countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(52px, 16vh, 76px);
+  font-weight: 300;
+  letter-spacing: -0.015em;
   line-height: 1;
 }
 
 .now-playing-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   text-align: left;
-  min-height: 56px;
+  min-height: 60px;
+  padding: 10px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 #album-art {
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   flex: none;
-  border-radius: 2px;
+  border-radius: var(--r-sm);
   object-fit: cover;
-  background: var(--border);
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-sm);
 }
 
 .now-playing-text {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -221,20 +347,37 @@ button.ghost:hover, button.ghost:active {
 
 #track-time {
   font-variant-numeric: tabular-nums;
+  font-size: 13px;
 }
+
+/* ---- Queue ------------------------------------------------------------ */
 
 #queue-toggle {
-  padding: 8px 20px;
-  font-size: 12px;
+  padding: 9px 22px;
+  font-size: 11px;
 }
 
-/* The only scrolling region in the app — the page itself never scrolls. */
+/* Collapsed by default; the .open class animates it in. It's the only
+   scrolling region in the app — the page itself never scrolls — and the fixed
+   max-height keeps an open queue from ever pushing the page past one viewport. */
 #queue-panel {
   width: 100%;
-  min-height: 0;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition: max-height var(--dur) var(--ease), opacity var(--dur) var(--ease),
+    padding var(--dur) var(--ease);
+}
+
+#queue-panel.open {
+  max-height: 38vh;
+  opacity: 1;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  padding: 4px 12px;
 }
 
 #queue-list {
@@ -245,13 +388,13 @@ button.ghost:hover, button.ghost:active {
 
 #queue-list li {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
   font-size: 14px;
   text-align: left;
   color: var(--dim);
+  transition: transform var(--dur) var(--ease);
 }
 
 #queue-list li + li {
@@ -264,17 +407,53 @@ button.ghost:hover, button.ghost:active {
 }
 
 #queue-list li.played {
-  opacity: 0.45;
+  opacity: 0.5;
+}
+
+#queue-list li.skipped .queue-duration {
+  font-style: italic;
+  color: var(--faint);
+}
+
+/* Drag-to-reorder. A grip slot sits on every row for alignment; only upcoming
+   rows fill it with a real handle. */
+.grip {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+}
+
+#queue-list li.upcoming .grip {
+  cursor: grab;
+  touch-action: none; /* let a drag start on the grip without the panel scrolling */
+}
+
+#queue-list li.dragging {
+  transition: none; /* follow the finger instantly; siblings still animate */
+  position: relative;
+  z-index: 5;
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+}
+
+#queue-list li.dragging .grip {
+  cursor: grabbing;
 }
 
 .queue-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .queue-artist {
-  color: var(--dim);
+  color: var(--faint);
   font-weight: 400;
 }
 
@@ -288,17 +467,70 @@ button.ghost:hover, button.ghost:active {
   justify-content: space-between;
   gap: 12px;
   width: 100%;
+  padding: 0 12px;
+  color: var(--dim);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+}
+
+/* ---- Progress --------------------------------------------------------- */
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+}
+
+.progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-inset);
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+
+#progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--accent), var(--accent-hi));
+  transition: width 1s linear;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  color: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 #version-tag {
   position: fixed;
-  right: 6px;
-  bottom: 4px;
+  right: 8px;
+  bottom: 6px;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
-  color: var(--border);
+  color: var(--border-strong);
   pointer-events: none;
   user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

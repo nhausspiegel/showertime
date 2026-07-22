@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="theme-color" content="#F2F3F1">
+<meta name="theme-color" content="#EEF0EB">
 <link rel="manifest" href="manifest.json">
 <title>timer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -26,31 +26,49 @@
       autocapitalize="off" spellcheck="false" value="25:00" aria-label="timer duration, minutes and seconds">
   </div>
   <button id="start-btn" class="primary" disabled>Start</button>
-  <p id="status-text" class="status"></p>
+  <div class="status-row">
+    <span id="load-spinner" class="spinner" hidden aria-hidden="true"></span>
+    <p id="status-text" class="status" role="status" aria-live="polite"></p>
+  </div>
 </section>
 
 <section id="live-screen" hidden>
   <p id="adjust-notice" class="status" hidden></p>
   <div id="countdown">0:00</div>
-  <div class="progress-track"><div id="progress-bar"></div></div>
+
+  <div class="progress">
+    <div class="progress-track"><div id="progress-bar"></div></div>
+    <div class="progress-meta">
+      <span id="elapsed">0:00</span>
+      <span id="total-time">0:00</span>
+    </div>
+  </div>
 
   <div class="now-playing-row">
     <img id="album-art" alt="" hidden>
     <div class="now-playing-text">
-      <p id="now-playing" class="label"></p>
-      <p id="track-time" class="status"></p>
+      <p id="now-playing"></p>
+      <p id="track-time"></p>
     </div>
   </div>
 
   <button id="queue-toggle" class="ghost" aria-expanded="false" aria-controls="queue-panel">Queue</button>
-  <div id="queue-panel" hidden>
+  <div id="queue-panel">
     <ul id="queue-list"></ul>
   </div>
-  <p id="queue-total" class="status" hidden></p>
+  <p id="queue-total" hidden></p>
 
   <div class="controls">
-    <button id="pause-btn" class="primary">Pause</button>
-    <button id="cancel-btn" class="ghost">Cancel</button>
+    <button id="skip-btn" class="icon ghost" aria-label="Skip song">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5.14v13.72a1 1 0 0 0 1.5.86l9-6.86a1 1 0 0 0 0-1.72L7.5 4.28A1 1 0 0 0 6 5.14Z"/><rect x="16.6" y="5" width="2.6" height="14" rx="1.3"/></svg>
+    </button>
+    <button id="pause-btn" class="icon primary" aria-label="Pause">
+      <svg class="ico ico-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.6"/><rect x="13.5" y="5" width="4" height="14" rx="1.6"/></svg>
+      <svg class="ico ico-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11.02-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14Z"/></svg>
+    </button>
+    <button id="cancel-btn" class="icon ghost" aria-label="Stop timer">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>
+    </button>
   </div>
 </section>
 
