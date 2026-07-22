@@ -99,11 +99,19 @@ decides which track owns each sum. Fed in `/me/top/tracks` order (most-played
 first), the user's #1 track became the sole owner of its own duration slot, and
 every reconstruction routing through that slot dragged it in — **one song
 appeared in 5 of 5 queues across five different timer lengths, with only 12
-distinct tracks across all of them.**
+distinct tracks across all of them.** `buildIndex()` shuffles the pool to break
+this — **after `dedupeById`, never before** (dedupe is first-occurrence-wins).
 
-`buildIndex()` shuffles each pool to break this. Shuffle **after `dedupeById`,
-never before** — dedupe is first-occurrence-wins, and that ordering is what
-gives short-term tracks precedence over medium/long in the layered pools.
+### The pool is one merged set of all three top-track ranges
+
+`buildIndex()` unions short/medium/long into a single shuffled pool. It used to
+*layer* them (short-term first, medium/long only as fallback), but a ~50-track
+layer hits almost any target exactly, so medium/long were essentially never
+drawn — every timer pulled from the same ~50 recent songs. Do not reintroduce
+layering to "prefer recent" tracks; it silently narrows the pool to short-term.
+Spotify offers no time-range beyond these three; a genuinely bigger pool needs a
+new *source* (`/me/tracks` Liked Songs), which requires the `user-library-read`
+scope and a re-auth on every device.
 
 ### Queue self-heals on skip via drift detection, not a "skip" handler
 

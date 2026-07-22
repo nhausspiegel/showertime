@@ -3,17 +3,18 @@
 // using subset-sum with no repeats (0/1 knapsack style), and looks up
 // the best combination for a target duration.
 //
-// Layering: short-term tracks get first claim on the index. Medium-term
-// tracks only get pulled in to cover durations short-term can't reach.
-// Long-term tracks are the last resort. This is done by building three
-// cumulative pools (short / short+medium / short+medium+long, deduped by
-// track id) and running subset-sum on each independently.
+// The pool is the union of the user's short-, medium-, and long-term top
+// tracks, deduped and shuffled into one flat set — every top track is equally
+// eligible. An earlier version layered short-term first and only reached for
+// medium/long to cover durations short-term couldn't hit. But a ~50-track
+// layer can hit almost any target exactly, so medium/long were essentially
+// never drawn: consecutive timers all pulled from the same ~50 recent songs.
 //
-// Within a layer the pool order is shuffled, because subsetSum claims each
-// sum for the *first* track that can reach it. Fed in `/me/top/tracks` order
-// (most-played first) the user's #1 track ends up the sole owner of its own
-// duration slot, so every reconstruction routing through that slot drags it
-// in — the same song then shows up in timer after timer, at every length.
+// The shuffle matters because subsetSum claims each sum for the *first* track
+// that can reach it. Fed in `/me/top/tracks` order (most-played first) the
+// user's #1 track ends up the sole owner of its own duration slot, so every
+// reconstruction routing through that slot drags it in — the same song then
+// shows up in timer after timer, at every length. Shuffling breaks that.
 
 /**
  * @param {Array<{id: string, durationSec: number}>} tracks
@@ -72,22 +73,11 @@ function dedupeById(...trackLists) {
  *   work done on every rebuild for a duration the UI can't ask for.
  */
 export function buildIndex(shortTracks, mediumTracks, longTracks, maxSeconds = 6000) {
-  // Shuffle *after* dedupeById, never before: dedupe is first-occurrence-wins,
-  // and that ordering is exactly what gives short-term tracks precedence over
-  // medium/long in the layered pools. Shuffling the deduped result changes
-  // only subsetSum's tie-breaking, leaving layer membership intact.
-  const layer1Pool = shuffle(dedupeById(shortTracks));
-  const layer2Pool = shuffle(dedupeById(shortTracks, mediumTracks));
-  const layer3Pool = shuffle(dedupeById(shortTracks, mediumTracks, longTracks));
-
-  return {
-    layers: [
-      subsetSum(layer1Pool, maxSeconds),
-      subsetSum(layer2Pool, maxSeconds),
-      subsetSum(layer3Pool, maxSeconds),
-    ],
-    maxSeconds,
-  };
+  // One merged, shuffled pool of every top track. Shuffle *after* dedupeById:
+  // dedupe is first-occurrence-wins, and shuffling the deduped result only
+  // affects which track wins a duration slot in subsetSum — keeping that fair.
+  const pool = shuffle(dedupeById(shortTracks, mediumTracks, longTracks));
+  return { layers: [subsetSum(pool, maxSeconds)], maxSeconds };
 }
 
 /**
