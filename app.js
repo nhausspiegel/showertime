@@ -13,6 +13,7 @@ const els = {
   statusText: document.getElementById('status-text'),
   loadSpinner: document.getElementById('load-spinner'),
   nowPlaying: document.getElementById('now-playing'),
+  nowPlayingArtist: document.getElementById('now-playing-artist'),
   albumArt: document.getElementById('album-art'),
   trackTime: document.getElementById('track-time'),
   queueToggle: document.getElementById('queue-toggle'),
@@ -687,6 +688,7 @@ function updateCountdown() {
 function clearNowPlaying() {
   track = null;
   els.nowPlaying.textContent = '';
+  els.nowPlayingArtist.textContent = '';
   els.trackTime.textContent = '';
   els.albumArt.hidden = true;
 }
@@ -705,7 +707,8 @@ function trackFromApiItem(item) {
 /** Renders one track into the now-playing row. Shared by the optimistic
  *  render at Start and the confirmed render from the poll. */
 function renderNowPlaying(t, progressSec) {
-  els.nowPlaying.textContent = `${t.name} — ${t.artist}`;
+  els.nowPlaying.textContent = t.name;
+  els.nowPlayingArtist.textContent = t.artist;
   els.albumArt.hidden = !t.art;
   if (t.art) els.albumArt.src = t.art;
   track = { id: t.id, durationSec: t.durationSec, progressSec, at: Date.now() };
@@ -713,6 +716,7 @@ function renderNowPlaying(t, progressSec) {
 }
 
 async function refreshNowPlaying() {
+  if (skipActive) return; // a skip is coalescing; the device lags the model, so its report is stale
   try {
     const playing = await spotify.getCurrentlyPlaying();
     const item = playing?.item;
@@ -737,8 +741,13 @@ async function refreshNowPlaying() {
 
     if (isOurs) {
       queueConfirmed = true;
-      if (reportedIdx > session.currentIdx) advanceCurrentTo(reportedIdx);
-      else if (reportedIdx < session.currentIdx) { session.currentIdx = reportedIdx; renderQueue(); }
+      if (reportedIdx > session.currentIdx) {
+        advanceCurrentTo(reportedIdx);
+      } else if (reportedIdx < session.currentIdx) {
+        // The device is still catching up to an optimistic skip — ignore this
+        // stale report rather than snapping the model (and the row) backward.
+        return;
+      }
       session.currentProgressSec = progressSec;
     }
 
@@ -767,6 +776,8 @@ function currentInterpProgressSec() {
 }
 
 const GRIP_SVG = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>';
+const X_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const TRASH_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 12h10l1-12"/></svg>';
 
 function renderQueue() {
   els.queueList.replaceChildren();
@@ -782,8 +793,11 @@ function renderQueue() {
     if (isPast) li.classList.add('played');
     if (isUpcoming) li.classList.add('upcoming');
 
-    // A grip slot on every row keeps titles aligned; only upcoming rows fill
-    // it with an actual (draggable) handle.
+    // Row content sits above a red swipe-to-delete layer; only upcoming rows
+    // get the swipe layer, a real drag grip, and a delete affordance.
+    const content = document.createElement('div');
+    content.className = 'row-content';
+
     const grip = document.createElement('span');
     grip.className = 'grip';
     if (isUpcoming) grip.innerHTML = GRIP_SVG;
@@ -808,7 +822,24 @@ function renderQueue() {
       dur.textContent = fmt(t.durationSec);
     }
 
-    li.append(grip, title, dur);
+    content.append(grip, title, dur);
+
+    if (isUpcoming) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'queue-delete';
+      del.dataset.trackId = t.id;
+      del.setAttribute('aria-label', `Remove ${t.name} from queue`);
+      del.innerHTML = X_SVG;
+      content.append(del);
+
+      const bg = document.createElement('div');
+      bg.className = 'swipe-bg';
+      bg.innerHTML = TRASH_SVG;
+      li.append(bg);
+    }
+
+    li.append(content);
     els.queueList.append(li);
   });
 
@@ -831,7 +862,19 @@ function finishSession() {
 
 // --- Skip ----------------------------------------------------------------
 
-els.skipBtn.addEventListener('click', async () => {
+// Skip advances the model instantly on every tap, so rapid taps are never
+// swallowed by an in-flight request (the old bug: the button was disabled
+// mid-re-queue, dropping taps ~1 in 10). The device re-queue is coalesced —
+// it fires once, shortly after the taps settle, and jumps straight to the
+// final track.
+const SKIP_COALESCE_MS = 300;
+let skipActive = false; // a skip is coalescing — the device lags the model, so ignore polls
+let skipToken = 0;      // guards against an older coalesced re-queue resolving late
+let skipTimer = null;
+
+els.skipBtn.addEventListener('click', skipCurrent);
+
+function skipCurrent() {
   if (!session || session.paused) return;
   const idx = session.currentIdx;
   const current = session.tracks[idx];
@@ -841,39 +884,46 @@ els.skipBtn.addEventListener('click', async () => {
   // Record the skip so the queue shows "skipped M:SS" for it.
   session.outcomes[current.id] = { skippedAfterSec: Math.min(current.durationSec, Math.round(currentInterpProgressSec())) };
   session.currentProgressSec = 0;
+  track = null;
 
-  const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
-  const next = session.tracks[idx + 1];
+  let nextCurrent = session.tracks[idx + 1];
+  if (!nextCurrent) {
+    // Skipped past the last queued track — solve a fresh set to advance into.
+    const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
+    const picked = remainingTimer > 1 ? pickCombo(Math.round(remainingTimer)) : null;
+    const existing = new Set(session.tracks.map((t) => t.id));
+    const fresh = picked ? shuffle(picked.combo.tracks).filter((t) => !existing.has(t.id)) : [];
+    if (fresh.length === 0) { renderQueue(); return; } // nothing left to play — let the timer run out
+    claim(fresh.map((t) => t.id));
+    session.tracks = session.tracks.slice(0, idx + 1).concat(fresh);
+    nextCurrent = fresh[0];
+  }
 
-  await setBusyDuring(els.skipBtn, async () => {
-    if (next) {
-      // Advance to the queued next track, refit the rest, re-queue from its start.
-      session.currentIdx = idx + 1;
-      session.lastRecalcAt = Date.now();
-      track = null;
-      renderQueue();
-      renderNowPlaying(next, 0);
-      await requeueUpcoming(Math.round(remainingTimer - next.durationSec), 0, { force: true });
-    } else {
-      // Skipped the last queued track — solve a whole fresh queue for the time
-      // left and play it from the top.
-      const picked = remainingTimer > 1 ? pickCombo(Math.round(remainingTimer)) : null;
-      const fresh = picked ? shuffle(picked.combo.tracks).filter((t) => t.id !== current.id) : [];
-      if (fresh.length === 0) return; // no time / nothing left — let the timer run out
-      claim(fresh.map((t) => t.id));
-      session.tracks = session.tracks.slice(0, idx + 1).concat(fresh);
-      session.currentIdx = idx + 1;
-      session.lastRecalcAt = Date.now();
-      track = null;
-      renderQueue();
-      renderNowPlaying(fresh[0], 0);
-      try {
-        await spotify.playTracks(fresh.map((t) => t.uri), deviceId);
-      } catch (e) { console.error(e); }
-      rebuildIndexesSoon();
+  session.currentIdx = idx + 1;
+  renderQueue();
+  renderNowPlaying(nextCurrent, 0);
+  scheduleSkipRequeue();
+}
+
+function scheduleSkipRequeue() {
+  skipActive = true;
+  const myToken = ++skipToken;
+  clearTimeout(skipTimer);
+  skipTimer = setTimeout(async () => {
+    if (myToken !== skipToken || !session || session.paused) return;
+    const current = session.tracks[session.currentIdx];
+    if (!current) { skipActive = false; return; }
+    const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
+    session.lastRecalcAt = Date.now();
+    try {
+      await requeueUpcoming(Math.round(remainingTimer - current.durationSec), 0, { force: true });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (myToken === skipToken) skipActive = false; // only the newest re-queue clears the guard
     }
-  });
-});
+  }, SKIP_COALESCE_MS);
+}
 
 /** Runs an async action with a spinner on `btn`, restoring it after. */
 async function setBusyDuring(btn, fn) {
@@ -882,16 +932,75 @@ async function setBusyDuring(btn, fn) {
   finally { setBusy(btn, false); }
 }
 
-// --- Drag to reorder upcoming tracks ------------------------------------
+// --- Delete a track from the queue --------------------------------------
+
+/**
+ * Removes an upcoming track and re-solves only the tracks after it, so the
+ * music still ends with the timer. The tracks between the current one and the
+ * deleted one are left as-is (per "recalculate the songs after the deleted
+ * one"). The deleted track stays claimed so it won't reappear this session.
+ */
+async function deleteTrack(trackId) {
+  if (!session) return;
+  const p = session.tracks.findIndex((t) => t.id === trackId);
+  if (p <= session.currentIdx) return; // only upcoming tracks are deletable
+
+  const current = session.tracks[session.currentIdx];
+  const kept = session.tracks.slice(0, p); // history + current + upcoming before the deleted track
+  const deleted = session.tracks[p];
+  const oldAfter = session.tracks.slice(p + 1);
+
+  const currentRemain = Math.max(0, current.durationSec - Math.round(currentInterpProgressSec()));
+  const keptUpcomingSec = kept.slice(session.currentIdx + 1).reduce((n, t) => n + t.durationSec, 0);
+  const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
+  const target = Math.round(remainingTimer - currentRemain - keptUpcomingSec);
+
+  const picked = target > 0 ? pickCombo(target) : null;
+  const excluded = new Set([...kept.map((t) => t.id), deleted.id]);
+  const newAfter = (picked ? shuffle(picked.combo.tracks) : []).filter((t) => !excluded.has(t.id));
+
+  const keepIds = new Set(newAfter.map((t) => t.id));
+  release(oldAfter.filter((t) => !keepIds.has(t.id) && !session.outcomes[t.id]).map((t) => t.id));
+  claim(newAfter.map((t) => t.id));
+
+  session.tracks = kept.concat(newAfter);
+  session.lastRecalcAt = Date.now();
+  renderQueue();
+
+  try {
+    const upcoming = session.tracks.slice(session.currentIdx + 1);
+    await spotify.playTracks([current.uri, ...upcoming.map((t) => t.uri)], deviceId, {
+      positionMs: Math.round(currentInterpProgressSec() * 1000),
+    });
+  } catch (e) {
+    console.error(e);
+  }
+  rebuildIndexesSoon();
+}
+
+// The hover-reveal × on desktop.
+els.queueList.addEventListener('click', (e) => {
+  const del = e.target.closest('.queue-delete');
+  if (!del) return;
+  haptic(10);
+  deleteTrack(del.dataset.trackId);
+});
+
+// --- Reorder (drag) and delete (swipe) upcoming tracks ------------------
 
 let drag = null;
 
+// One pointerdown entry point: the grip starts a reorder drag; a touch on the
+// row body starts a swipe-to-delete. The × button is a plain click (above).
 els.queueList.addEventListener('pointerdown', (e) => {
-  const grip = e.target.closest('.grip');
-  if (!grip) return;
-  const li = grip.closest('li');
-  if (!li || !li.classList.contains('upcoming') || !session) return;
+  if (!session || e.target.closest('.queue-delete')) return;
+  const li = e.target.closest('li');
+  if (!li || !li.classList.contains('upcoming')) return;
+  if (e.target.closest('.grip')) startDrag(e, li);
+  else if (e.pointerType !== 'mouse') startSwipe(e, li);
+});
 
+function startDrag(e, li) {
   const rows = [...els.queueList.querySelectorAll('li.upcoming')];
   const fromPos = rows.indexOf(li);
   if (fromPos < 0) return;
@@ -905,7 +1014,7 @@ els.queueList.addEventListener('pointerdown', (e) => {
   window.addEventListener('pointermove', onDragMove);
   window.addEventListener('pointerup', onDragEnd);
   window.addEventListener('pointercancel', onDragEnd);
-});
+}
 
 function onDragMove(e) {
   if (!drag) return;
@@ -955,6 +1064,58 @@ async function onDragEnd() {
   } catch (e) {
     console.error(e);
   }
+}
+
+// Swipe an upcoming row left past a threshold to delete it. The row-content
+// has `touch-action: pan-y`, so vertical drags scroll the panel natively and
+// only horizontal drags reach us (a vertical scroll fires pointercancel).
+const SWIPE_DELETE_PX = 80;
+let swipe = null;
+
+function startSwipe(e, li) {
+  swipe = { li, content: li.querySelector('.row-content'), id: li.dataset.trackId, startX: e.clientX };
+  window.addEventListener('pointermove', onSwipeMove);
+  window.addEventListener('pointerup', onSwipeEnd);
+  window.addEventListener('pointercancel', onSwipeReset);
+}
+
+function onSwipeMove(e) {
+  if (!swipe) return;
+  const dx = Math.min(0, e.clientX - swipe.startX); // left only
+  swipe.content.style.transition = 'none';
+  swipe.content.style.transform = `translateX(${dx}px)`;
+  swipe.li.classList.toggle('will-delete', dx <= -SWIPE_DELETE_PX);
+}
+
+function onSwipeEnd(e) {
+  if (!swipe) return;
+  const commit = (e.clientX - swipe.startX) <= -SWIPE_DELETE_PX;
+  const { li, content, id } = swipe;
+  detachSwipe();
+  content.style.transition = '';
+  if (commit) {
+    haptic(12);
+    deleteTrack(id); // re-renders the queue, dropping this row
+  } else {
+    content.style.transform = ''; // spring back
+    li.classList.remove('will-delete');
+  }
+}
+
+function onSwipeReset() {
+  if (!swipe) return;
+  const { content, li } = swipe;
+  detachSwipe();
+  content.style.transition = '';
+  content.style.transform = '';
+  li.classList.remove('will-delete');
+}
+
+function detachSwipe() {
+  window.removeEventListener('pointermove', onSwipeMove);
+  window.removeEventListener('pointerup', onSwipeEnd);
+  window.removeEventListener('pointercancel', onSwipeReset);
+  swipe = null;
 }
 
 els.cancelBtn.addEventListener('click', async () => {

@@ -134,6 +134,25 @@ Guards that must stay, each already cost a reasoning pass:
 - **`setShuffleOff()` before `playTracks()` is load-bearing here too** — drift
   math assumes the queue plays in order.
 
+### Rapid skips: advance the model per tap, coalesce the device call
+
+Do not wrap skip in a busy/disabled guard during its async re-queue — a tap
+landing in that window is silently dropped (was ~1 in 10 on fast multi-skips).
+`skipCurrent()` advances `session.currentIdx` and re-renders on every tap, and
+`scheduleSkipRequeue()` debounces a single `playTracks` that jumps to the final
+track. While a skip is coalescing (`skipActive`), `refreshNowPlaying()` returns
+early, and it also ignores any poll whose track is *behind* `currentIdx` — that
+report is just the device lagging the optimistic skips, not a rewind.
+
+### Changing the queue (reorder / delete) reloads the current track
+
+Reorder and delete both re-send the play list, and Spotify has no queue-edit
+endpoint, so the current song briefly reloads (see
+`showertime-reorder-reload-wontfix` memory). This is accepted. `deleteTrack()`
+keeps the tracks between the current one and the deleted one, and re-solves only
+the tracks *after* it; the deleted id stays claimed so it won't reappear this
+session.
+
 ### Player-state polls lag — treat them as confirmation, not truth
 
 `/me/player/currently-playing` is eventually consistent: it reflects what the

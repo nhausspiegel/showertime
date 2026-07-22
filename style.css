@@ -327,27 +327,40 @@ button.primary.busy::after {
   box-shadow: var(--shadow-sm);
 }
 
+/* Stretch to the album-art height and space the three lines out, so the title
+   sits at the top, the times at the bottom, and the artist fills the middle —
+   rather than two lines with a gap. */
 .now-playing-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  justify-content: space-between;
+  align-self: stretch;
   min-width: 0;
+  padding: 1px 0;
 }
 
-#now-playing {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--fg);
+.now-playing-text p {
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+#now-playing {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+#now-playing-artist {
+  font-size: 13px;
+  color: var(--faint);
+}
+
 #track-time {
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: 12px;
+  color: var(--dim);
 }
 
 /* ---- Queue ------------------------------------------------------------ */
@@ -387,13 +400,9 @@ button.primary.busy::after {
 }
 
 #queue-list li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  font-size: 14px;
+  position: relative;
+  overflow: hidden;
   text-align: left;
-  color: var(--dim);
   transition: transform var(--dur) var(--ease);
 }
 
@@ -401,7 +410,26 @@ button.primary.busy::after {
   border-top: 1px solid var(--border);
 }
 
-#queue-list li.current {
+/* Row content rides above the red swipe-to-delete layer; its opaque background
+   hides that layer until the row is swiped left. */
+.row-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  font-size: 14px;
+  color: var(--dim);
+  background: var(--surface-inset);
+  position: relative;
+  z-index: 1;
+  transition: transform var(--dur) var(--ease);
+}
+
+#queue-list li.upcoming .row-content {
+  touch-action: pan-y; /* vertical scrolls the panel; horizontal is our swipe */
+}
+
+#queue-list li.current .row-content {
   color: var(--accent);
   font-weight: 600;
 }
@@ -433,15 +461,61 @@ button.primary.busy::after {
 
 #queue-list li.dragging {
   transition: none; /* follow the finger instantly; siblings still animate */
-  position: relative;
   z-index: 5;
-  background: var(--surface);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-md);
 }
 
+#queue-list li.dragging .row-content {
+  background: var(--surface);
+}
+
 #queue-list li.dragging .grip {
   cursor: grabbing;
+}
+
+/* Swipe-to-delete (touch): the row-content slides left to reveal this. */
+.swipe-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 16px;
+  background: var(--invalid);
+  color: #fff;
+  border-radius: var(--r-sm);
+}
+
+.swipe-bg svg { transition: transform var(--dur) var(--ease); }
+#queue-list li.will-delete .swipe-bg svg { transform: scale(1.18); }
+
+/* Hover-reveal delete × (desktop). Hidden on touch, where swipe handles it. */
+.queue-delete {
+  flex: none;
+  display: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: var(--faint);
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .queue-delete { display: inline-flex; }
+  #queue-list li.upcoming:hover .queue-delete { opacity: 1; }
+  .queue-delete:hover { color: var(--invalid); background: var(--invalid-fill); }
+  .queue-delete:active { transform: none; }
 }
 
 .queue-title {
