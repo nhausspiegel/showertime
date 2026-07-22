@@ -86,10 +86,18 @@ export async function getDevices() {
   return json?.devices || [];
 }
 
-export async function playTracks(uris, deviceId) {
+export async function playTracks(uris, deviceId, { positionMs } = {}) {
+  const body = { uris };
+  // Resume uris[0] partway through — used when re-queuing mid-song so the
+  // track that's already playing continues from where it is rather than
+  // restarting, with the fresh tail behind it.
+  if (positionMs != null) {
+    body.offset = { position: 0 };
+    body.position_ms = Math.round(positionMs);
+  }
   await api(`/me/player/play${playerQuery(deviceId)}`, {
     method: 'PUT',
-    body: JSON.stringify({ uris }),
+    body: JSON.stringify(body),
   });
 }
 

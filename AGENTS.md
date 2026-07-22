@@ -80,6 +80,27 @@ distinct tracks across all of them.**
 never before** — dedupe is first-occurrence-wins, and that ordering is what
 gives short-term tracks precedence over medium/long in the layered pools.
 
+### Queue self-heals on skip via drift detection, not a "skip" handler
+
+The music is solved to end exactly when the timer does. Skipping, seeking, or
+replaying breaks that sum. `maybeRecalcQueue()` runs inside the existing
+now-playing poll: it compares remaining music (current track's remainder + the
+durations queued after it) against remaining timer, and when they drift past
+`DRIFT_THRESHOLD_SEC` it re-solves the tail via `pickCombo()` and re-queues it
+behind the current song (`playTracks(..., { positionMs })` resumes the current
+track in place). One check covers skip forward/back, seek, and in-app pauses —
+there is deliberately no per-event handler.
+
+Guards that must stay, each already cost a reasoning pass:
+- **It only fires on real drift, debounced by `RECALC_COOLDOWN_MS`, and skips
+  the PUT entirely when the re-solved tail is unchanged.** So the poll stays
+  zero-request in steady state — a re-queue is only issued in response to a
+  user action. Do not let it re-queue on every poll.
+- **If the playing track isn't in `session.tracks` (`idx < 0`), do nothing.**
+  The user has wandered to other playback; re-queuing would hijack them.
+- **`setShuffleOff()` before `playTracks()` is load-bearing here too** — drift
+  math assumes the queue plays in order.
+
 ### Player-state polls lag — treat them as confirmation, not truth
 
 `/me/player/currently-playing` is eventually consistent: it reflects what the

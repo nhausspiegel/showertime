@@ -358,6 +358,77 @@ function releaseUnplayedTracks() {
   rebuildIndexesSoon();
 }
 
+// The music was solved to end exactly when the timer does. Skipping a track
+// (or seeking, or replaying) breaks that: the queued songs no longer sum to
+// the time left. These bounds re-solve the tail when they've drifted apart.
+const DRIFT_THRESHOLD_SEC = 10; // below this is normal poll jitter and rounding — leave it
+const RECALC_COOLDOWN_MS = 8000; // let a re-queue reach the device before checking again
+
+/**
+ * Keeps the music ending with the timer. Called from the now-playing poll with
+ * the track Spotify says is playing. If the remaining music has drifted from
+ * the remaining time by more than the threshold, re-solves the tracks after
+ * the current one to fill exactly the gap, and re-queues them behind the
+ * current song without interrupting it.
+ */
+async function maybeRecalcQueue(item, progressMs) {
+  if (!session || session.paused) return;
+  if (Date.now() - (session.lastRecalcAt || 0) < RECALC_COOLDOWN_MS) return;
+
+  // Only maintain the queue while the user is actually playing it. If they've
+  // wandered off to something else, re-queuing our tracks would hijack them.
+  const idx = session.tracks.findIndex((t) => t.id === item.id);
+  if (idx < 0) return;
+
+  const currentRemainSec = Math.max(0, Math.round(item.duration_ms / 1000) - Math.round(progressMs / 1000));
+  const tailSec = session.tracks.slice(idx + 1).reduce((n, t) => n + t.durationSec, 0);
+  const remainingMusic = currentRemainSec + tailSec;
+  const remainingTimer = Math.max(0, (session.endAt - Date.now()) / 1000);
+  if (Math.abs(remainingMusic - remainingTimer) <= DRIFT_THRESHOLD_SEC) return;
+
+  // Solve the tail for the time left once the current track finishes.
+  const target = Math.round(remainingTimer - currentRemainSec);
+  const picked = target > 0 ? pickCombo(target) : null;
+  const newTail = (picked ? shuffle(picked.combo.tracks) : [])
+    .filter((t) => t.id !== item.id); // never let the tail replay the current song
+
+  // If the solve lands on the same tracks already queued after the current one,
+  // the drift is in the timing, not the queue — re-queuing would only cause an
+  // audible blip for no change. Bank the cooldown and skip the network call.
+  const sameTail = (a, b) => a.length === b.length && a.every((t, i) => t.id === b[i].id);
+  if (sameTail(newTail, session.tracks.slice(idx + 1))) {
+    session.lastRecalcAt = Date.now();
+    return;
+  }
+
+  const current = session.tracks[idx];
+  const keep = new Set([current.id, ...newTail.map((t) => t.id)]);
+  // Tracks we're dropping that never played are freed for a later timer; the
+  // new tail is claimed. Pick ran before this, so it couldn't grab the old
+  // tail — the fresh tail is genuinely fresh.
+  for (const t of session.tracks) {
+    if (!keep.has(t.id) && !playedIds.has(t.id)) usedTrackIds.delete(t.id);
+  }
+  for (const t of newTail) usedTrackIds.add(t.id);
+  saveUsedTrackIds();
+
+  session.tracks = [current, ...newTail];
+  session.lastRecalcAt = Date.now();
+
+  try {
+    await spotify.playTracks([current.uri, ...newTail.map((t) => t.uri)], deviceId, {
+      positionMs: Math.max(0, progressMs),
+    });
+  } catch (e) {
+    console.error(e);
+    return; // leave the display alone if the re-queue didn't take
+  }
+
+  renderQueue();
+  markCurrentInQueue();
+  rebuildIndexesSoon();
+}
+
 els.connectBtn.addEventListener('click', () => auth.connect());
 
 function setQueueOpen(open) {
@@ -420,6 +491,7 @@ els.startBtn.addEventListener('click', async () => {
     endAt: Date.now() + combo.seconds * 1000,
     paused: false,
     pausedAt: null,
+    lastRecalcAt: Date.now(), // suppress drift recalc while playback stabilizes
   };
   playedIds = new Set();
   queueConfirmed = false;
@@ -581,6 +653,8 @@ async function refreshNowPlaying() {
     }
 
     renderNowPlaying(trackFromApiItem(item), Math.round((playing.progress_ms || 0) / 1000));
+
+    if (isOurs) await maybeRecalcQueue(item, playing.progress_ms || 0);
   } catch (e) {
     // non-fatal — live view keeps running off the local countdown
   }
