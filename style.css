@@ -403,7 +403,14 @@ button.primary.busy::after {
   position: relative;
   overflow: hidden;
   text-align: left;
-  transition: transform var(--dur) var(--ease);
+  transition: transform var(--dur) var(--ease), height var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+/* Delete: the row slides its content out and collapses its height, so the rows
+   below animate up to close the gap. */
+#queue-list li.removing {
+  pointer-events: none;
 }
 
 #queue-list li + li {

@@ -990,12 +990,38 @@ async function deleteTrack(trackId) {
   rebuildIndexesSoon();
 }
 
+// Animate the row out (slide left + collapse, so the rows below slide up to
+// fill) before the model update and re-render, so a delete reads as a motion
+// rather than a snap.
+function removeRowThenDelete(li, trackId) {
+  if (!li) { deleteTrack(trackId); return; }
+  const content = li.querySelector('.row-content');
+  li.style.height = `${li.getBoundingClientRect().height}px`;
+  void li.offsetHeight; // reflow so the height transition has a start value
+  li.classList.add('removing');
+  li.style.height = '0px';
+  li.style.opacity = '0';
+  if (content) {
+    content.style.transition = '';
+    content.style.transform = 'translateX(-100%)';
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    li.removeEventListener('transitionend', finish);
+    deleteTrack(trackId);
+  };
+  li.addEventListener('transitionend', finish);
+  setTimeout(finish, 400); // fallback if transitionend never fires (e.g. reduced motion)
+}
+
 // The hover-reveal × on desktop.
 els.queueList.addEventListener('click', (e) => {
   const del = e.target.closest('.queue-delete');
   if (!del) return;
   haptic(10);
-  deleteTrack(del.dataset.trackId);
+  removeRowThenDelete(del.closest('li'), del.dataset.trackId);
 });
 
 // --- Reorder (drag) and delete (swipe) upcoming tracks ------------------
@@ -1107,7 +1133,7 @@ function onSwipeEnd(e) {
   content.style.transition = '';
   if (commit) {
     haptic(12);
-    deleteTrack(id); // re-renders the queue, dropping this row
+    removeRowThenDelete(li, id); // animate the row out, then delete + re-render
   } else {
     content.style.transform = ''; // spring back
     li.classList.remove('will-delete');
